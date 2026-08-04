@@ -6,17 +6,19 @@ const USERS = {
 };
 
 const NAV_ITEMS = [
-  { id: 'command',  icon: '⚡', label: 'Command Centre', roles: ['full'] },
-  { id: 'verticals',icon: '🏢', label: 'Verticals',      roles: ['full'] },
-  { id: 'webinars', icon: '🎯', label: 'Webinar Intel',  roles: ['full'] },
-  { id: 'revenue',  icon: '💰', label: 'Revenue & Sales',roles: ['full'] },
-  { id: 'pipeline', icon: '📊', label: 'Lead Pipeline',  roles: ['full', 'ops'] },
-  { id: 'marketing',icon: '📣', label: 'Marketing Funnel',roles: ['full'] },
-  { id: 'funnel',   icon: '🔀', label: 'Funnel Analytics',roles: ['full'] },
-  { id: 'team',     icon: '👥', label: 'Team Health',    roles: ['full', 'ops'] },
-  { id: 'ingest',   icon: '📥', label: 'Data Ingestion', roles: ['full', 'ops'] },
-  { id: 'ops',      icon: '🔧', label: 'Community Ops',  roles: ['full', 'ops'] },
-  { id: 'ask',      icon: '🤖', label: 'Ask HERA',       roles: ['full', 'ops'] }
+  { id: 'command',    icon: '⚡', label: 'Command Centre',     roles: ['full'] },
+  { id: 'analytics',  icon: '📊', label: 'Intelligence Report', roles: ['full'] },
+  { id: 'verticals',  icon: '🏢', label: 'Verticals',           roles: ['full'] },
+  { id: 'webinars',   icon: '🎯', label: 'Webinar Intel',       roles: ['full'] },
+  { id: 'revenue',    icon: '💰', label: 'Revenue & Sales',     roles: ['full'] },
+  { id: 'pipeline',   icon: '📊', label: 'Lead Pipeline',       roles: ['full', 'ops'] },
+  { id: 'assignments',icon: '🗂️', label: 'Lead Assignments',    roles: ['full', 'ops'] },
+  { id: 'marketing',  icon: '📣', label: 'Marketing Funnel',    roles: ['full'] },
+  { id: 'funnel',     icon: '🔀', label: 'Funnel Analytics',    roles: ['full'] },
+  { id: 'team',       icon: '👥', label: 'Team Health',         roles: ['full', 'ops'] },
+  { id: 'ingest',     icon: '📥', label: 'Data Ingestion',      roles: ['full', 'ops'] },
+  { id: 'ops',        icon: '🔧', label: 'Community Ops',       roles: ['full', 'ops'] },
+  { id: 'ask',        icon: '🤖', label: 'Ask HERA',            roles: ['full', 'ops'] }
 ];
 
 let SESSION = null;
@@ -187,7 +189,7 @@ function buildDataFromStatic(sd) {
 }
 
 function renderPage(pageId) {
-  const pages = { command, verticals, webinars, revenue, pipeline, marketing, team, ops, ask, ingest, funnel };
+  const pages = { command, verticals, webinars, revenue, pipeline, marketing, team, ops, ask, ingest, funnel, analytics, assignments };
   if (pages[pageId]) pages[pageId]();
 }
 
@@ -1658,6 +1660,31 @@ function ingest() {
 
 </div>
 
+<!-- LIVE GOOGLE SHEETS -->
+<div class="card mb-24">
+  <div class="card-header">
+    <div class="card-title">📡 Live Google Sheets Connector</div>
+    <span style="font-size:11px;color:var(--muted);">Auto-refresh every 5 min · No upload needed</span>
+  </div>
+  <p class="text-muted mb-16" style="font-size:11px;">Add a published Google Sheet URL. HERA will poll it every 5 minutes and merge updates into the live dashboard. Sheet must be <strong>published to web</strong> (File → Share → Publish to web → CSV).</p>
+  <div id="live-sheets-list" style="margin-bottom:12px;"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+    <div style="flex:1;min-width:200px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Sheet Name</label>
+      <input type="text" id="ls-name" placeholder="e.g. Community Master" style="background:var(--ink3);border:1px solid var(--border2);color:var(--ghost);padding:8px 12px;border-radius:6px;font-size:12px;width:100%;"/>
+    </div>
+    <div style="flex:2;min-width:280px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Published CSV URL</label>
+      <input type="text" id="ls-url" placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv" style="background:var(--ink3);border:1px solid var(--border2);color:var(--ghost);padding:8px 12px;border-radius:6px;font-size:12px;width:100%;"/>
+    </div>
+    <button class="btn-primary btn-sm" onclick="addLiveSheet()">+ Add</button>
+  </div>
+  <div id="ls-result" style="margin-top:10px;font-size:12px;"></div>
+  <div style="margin-top:12px;padding:10px;background:var(--ink3);border-radius:6px;font-size:11px;color:var(--muted);">
+    <strong style="color:#fff;">How to get the URL:</strong> Open your Google Sheet → File → Share → Publish to web → Select "Entire Document" → Format: CSV → Publish → Copy link. Paste above.
+  </div>
+</div>
+
 <!-- CURRENT DATA FILES -->
 <div class="card mb-24">
   <div class="card-header">
@@ -2189,3 +2216,604 @@ function fmtNum(n) {
   if (n>=1000)    return (n/1000).toFixed(1)+'K';
   return n.toString();
 }
+
+// ── INTELLIGENCE REPORT (ANALYTICS) ──────────────────────────
+function analytics() {
+  const d = DATA_CACHE;
+  const leads    = d.leads    || [];
+  const revenue  = d.revenue  || [];
+  const webinars = d.webinarDNA || [];
+  const marketing= d.marketing  || [];
+  const team     = d.team       || [];
+
+  // ── Core metrics ──
+  const TOTAL_SPEND = marketing.reduce((s,m) => s + (m.spent||0), 0) || 360000;
+  const totalLeads  = leads.length;
+  const cpl         = totalLeads > 0 ? TOTAL_SPEND / totalLeads : 0;
+  const totalEnroll = revenue.length;
+  const totalRev    = revenue.reduce((s,r) => s + (r.price||0), 0);
+  const cpa         = totalEnroll > 0 ? TOTAL_SPEND / totalEnroll : 0;
+  const roas        = TOTAL_SPEND > 0 ? totalRev / TOTAL_SPEND : 0;
+  const overallCVR  = totalLeads > 0 ? (totalEnroll / totalLeads * 100) : 0;
+
+  // Webinar funnel
+  const totalWAtt  = webinars.reduce((s,w) => s + (w.attendees||0), 0);
+  const totalWConv = webinars.reduce((s,w) => s + (w.conversions||0), 0);
+  const webCVR     = totalWAtt > 0 ? (totalWConv / totalWAtt * 100) : 0;
+  const attendRate = totalLeads > 0 ? (totalWAtt / totalLeads * 100) : 0;
+
+  // ── Per-vertical breakdown ──
+  const VERTS = ['CD','CL','ID','AI','AIW'];
+  const VLABELS = {CD:'Contract Drafting',CL:'Criminal Litigation',ID:'Independent Drafting',AI:'Legal AI',AIW:'AI for Women'};
+  const vStats = VERTS.map(v => {
+    const vl  = leads.filter(l => l.vertical === v);
+    const vr  = revenue.filter(r => r.vertical === v);
+    const vw  = webinars.filter(w => w.vertical === v);
+    const vm  = marketing.filter(m => m.vertical === v);
+    const sp  = vm.reduce((s,m)=>s+(m.spent||0),0);
+    const enr = vr.length;
+    const cvr = vl.length > 0 ? (enr/vl.length*100) : 0;
+    const rev = vr.reduce((s,r)=>s+(r.price||0),0);
+    const watt= vw.reduce((s,w)=>s+(w.attendees||0),0);
+    const wconv=vw.reduce((s,w)=>s+(w.conversions||0),0);
+    const cpl  = vl.length>0 && sp>0 ? sp/vl.length : null;
+    // Issues
+    const issues = [];
+    if (cvr < 3)  issues.push({sev:'red',  msg:`CVR ${cvr.toFixed(1)}% is critically low (threshold 3%)`});
+    else if (cvr < 6) issues.push({sev:'amber',msg:`CVR ${cvr.toFixed(1)}% is below target 6%`});
+    if (watt > 0 && (wconv/watt*100) < 5) issues.push({sev:'amber',msg:`Webinar CVR ${(wconv/watt*100).toFixed(1)}% — low engagement`});
+    if (sp > 0 && rev/sp < 2) issues.push({sev:'red',  msg:`ROAS ${(rev/sp).toFixed(2)}x — spend not recovering revenue`});
+    const overload = team.filter(t=>t.vertical===v && t.assigned>80);
+    if (overload.length) issues.push({sev:'amber',msg:`${overload.length} AC(s) overloaded (>80 leads)`});
+    return {v, label:VLABELS[v], leads:vl.length, enr, cvr, rev, sp, cpl, watt, wconv, webCVR:watt>0?wconv/watt*100:0, issues};
+  });
+
+  // ── What went wrong (auto-diagnosis) ──
+  const diagnose = [];
+  if (cpl > 500)  diagnose.push({sev:'red',  cat:'Ads',     msg:`CPL ₹${Math.round(cpl).toLocaleString()} is high — target <₹500. Review audience targeting or ad creatives.`});
+  if (overallCVR < 3) diagnose.push({sev:'red',  cat:'Sales',   msg:`Overall CVR ${overallCVR.toFixed(1)}% is below the 3% floor. AC talk-time and roadmap call compliance need checking.`});
+  if (attendRate < 30) diagnose.push({sev:'amber',cat:'Webinar', msg:`Only ${attendRate.toFixed(0)}% of leads attended webinars. Lead nurturing (Day 1-7 messages) may be missing.`});
+  if (webCVR < 5)  diagnose.push({sev:'amber',cat:'Webinar', msg:`Webinar CVR ${webCVR.toFixed(1)}% is low — review offer presentation, urgency, and pricing anchor.`});
+  if (roas < 2)    diagnose.push({sev:'red',  cat:'Revenue', msg:`ROAS ${roas.toFixed(2)}x — every ₹1 spent returns ₹${roas.toFixed(2)}. Need ROAS >3x to be profitable.`});
+  const overloadedACs = team.filter(t => t.assigned > 80);
+  if (overloadedACs.length > 0) diagnose.push({sev:'amber',cat:'Team', msg:`${overloadedACs.length} ACs have >80 leads — follow-up quality drops. Redistribute or cap intake.`});
+  const lopRisk = team.filter(t => t.lopDays >= 3);
+  if (lopRisk.length > 0) diagnose.push({sev:'amber',cat:'Team', msg:`${lopRisk.length} ACs on LOP ≥3 days — leads may be going cold. Check handover.`});
+  const noRoadmap = vStats.filter(v => v.enr > 0 && v.wconv === 0);
+  if (noRoadmap.length > 0) diagnose.push({sev:'red',cat:'Ops', msg:`${noRoadmap.map(v=>v.v).join(', ')} — enrollments with zero webinar conversions. Roadmap calls not logged?`});
+  if (diagnose.length === 0) diagnose.push({sev:'green',cat:'Overall',msg:'No critical issues detected. All key metrics within range.'});
+
+  // ── Improvements (prescriptive) ──
+  const improve = [
+    {icon:'🎯', title:'Reduce CPL via retargeting',  body:`Current CPL ₹${Math.round(cpl).toLocaleString()}. Retargeting warm audiences (video viewers, landing page visitors) typically cuts CPL by 30-50%.`},
+    {icon:'📞', title:'AC roadmap call discipline',   body:'Every lead should receive a personalized roadmap call within 48h. Track compliance in the Assignments tab — flag any lead >48h without a call.'},
+    {icon:'📅', title:'Webinar Day-3 & Day-7 nudge', body:`${(100-attendRate).toFixed(0)}% of leads never attended a webinar. Automated WhatsApp nudges on Day 3 and Day 7 post-signup can lift attendance 20-35%.`},
+    {icon:'💬', title:'Webinar offer tightening',     body:`Webinar CVR ${webCVR.toFixed(1)}%. Add a deadline offer (valid 24h post-webinar), testimonial reel, and EMI reminder. Target 8-10% CVR.`},
+    {icon:'👥', title:'AC load balancing',            body:'Cap each AC at 60 active leads. Rotate new leads to ACs below threshold. Overloaded ACs have 40% lower CVR on average.'},
+    {icon:'📋', title:'Roadmap compliance tracking',  body:'CMs should confirm roadmap completion in HERA daily. Missing roadmap = the #1 reason for churn in W1-W3.'},
+    {icon:'🔗', title:'Live Sheets sync',             body:'Connect Google Sheets in Data Ingestion → Live Sources. This removes the upload cycle and keeps HERA data <5 minutes stale.'},
+  ];
+
+  // ── Caller leaderboard ──
+  const callerMap = {};
+  revenue.forEach(r => {
+    const c = r.callerName || 'Unknown';
+    if (!callerMap[c]) callerMap[c] = {name:c, enr:0, rev:0};
+    callerMap[c].enr++;
+    callerMap[c].rev += r.price||0;
+  });
+  const leaderboard = Object.values(callerMap).sort((a,b)=>b.enr-a.enr).slice(0,10);
+
+  // ── Marketing CPL per group ──
+  const mktRows = marketing.filter(m=>m.spent>0).sort((a,b)=>b.spent-a.spent).slice(0,15);
+
+  const sevClr = s => s==='red'?'var(--err)':s==='amber'?'var(--warn)':'var(--ok)';
+  const sevBadge = s => `<span class="badge ${s==='red'?'badge-err':s==='amber'?'badge-warn':'badge-ok'}" style="font-size:10px;">${s.toUpperCase()}</span>`;
+
+  $("main-content").innerHTML = `
+<div class="page-header">
+  <div><div class="page-title">📊 Intelligence Report</div>
+    <div class="page-sub">Team Abhipsa · Spend ₹${(TOTAL_SPEND/100000).toFixed(1)}L · ${totalLeads.toLocaleString()} leads · ${totalEnroll} enrolled</div></div>
+  <button class="btn-primary btn-sm" onclick="analyticsAIInsight()">✨ AI Deep Dive</button>
+</div>
+
+<!-- KPI row -->
+<div class="kpi-grid mb-20">
+  <div class="kpi-card"><div class="kpi-val">${formatINR(TOTAL_SPEND)}</div><div class="kpi-label">Total Ad Spend</div></div>
+  <div class="kpi-card"><div class="kpi-val">${totalLeads.toLocaleString()}</div><div class="kpi-label">Leads Generated</div></div>
+  <div class="kpi-card"><div class="kpi-val" style="color:${cpl>500?'var(--err)':'var(--ok)'};">${formatINR(cpl)}</div><div class="kpi-label">Cost Per Lead</div></div>
+  <div class="kpi-card"><div class="kpi-val">${formatINR(cpa)}</div><div class="kpi-label">Cost Per Enrolment</div></div>
+  <div class="kpi-card"><div class="kpi-val" style="color:${roas<2?'var(--err)':roas<3?'var(--warn)':'var(--ok)'};">${roas.toFixed(2)}x</div><div class="kpi-label">ROAS</div></div>
+  <div class="kpi-card"><div class="kpi-val" style="color:${overallCVR<3?'var(--err)':overallCVR<6?'var(--warn)':'var(--ok)'};">${overallCVR.toFixed(1)}%</div><div class="kpi-label">Overall CVR</div></div>
+  <div class="kpi-card"><div class="kpi-val">${formatINR(totalRev)}</div><div class="kpi-label">Total Revenue</div></div>
+  <div class="kpi-card"><div class="kpi-val" style="color:${attendRate<30?'var(--err)':attendRate<50?'var(--warn)':'var(--ok)'};">${attendRate.toFixed(0)}%</div><div class="kpi-label">Webinar Attend Rate</div></div>
+</div>
+
+<!-- Funnel waterfall -->
+<div class="card mb-20">
+  <div class="card-header"><div class="card-title">Full Funnel Waterfall</div><span style="font-size:11px;color:var(--muted);">Leads → Webinar → Enrolled → Revenue</span></div>
+  ${(()=>{
+    const stages = [
+      {label:'Leads In',          n:totalLeads,  spend:TOTAL_SPEND},
+      {label:'Webinar Attended',  n:totalWAtt,   prev:totalLeads},
+      {label:'Webinar Converted', n:totalWConv,  prev:totalWAtt},
+      {label:'Enrolled (Paid)',   n:totalEnroll, prev:totalWConv, rev:totalRev},
+    ];
+    const max = totalLeads||1;
+    return stages.map((s,i)=>{
+      const pct = Math.max(4,Math.round(s.n/max*100));
+      const drop = s.prev>0 ? (100 - s.n/s.prev*100).toFixed(0) : null;
+      const clr = drop>80?'var(--err)':drop>60?'var(--warn)':'var(--ok)';
+      const extra = s.spend ? `<span style="font-size:10px;color:var(--muted);"> · Spend ${formatINR(s.spend)}</span>` :
+                    s.rev   ? `<span style="font-size:10px;color:var(--ok);"> · Rev ${formatINR(s.rev)}</span>` : '';
+      return `<div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">
+          <span style="color:#fff;font-weight:500;">${s.label}</span>
+          <span>${s.n.toLocaleString()}${extra}${drop?` <span style="font-size:10px;color:${clr};">↓${drop}% drop</span>`:''}</span>
+        </div>
+        <div style="background:var(--ink3);border-radius:4px;height:12px;">
+          <div style="width:${pct}%;background:var(--red);height:100%;border-radius:4px;"></div>
+        </div>
+      </div>`;
+    }).join('');
+  })()}
+</div>
+
+<!-- What went wrong -->
+<div class="card mb-20">
+  <div class="card-header"><div class="card-title">🚨 What Went Wrong</div><span class="badge badge-err">${diagnose.filter(d=>d.sev==='red').length} critical</span></div>
+  ${diagnose.map(d=>`
+  <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+    <div>${sevBadge(d.sev)}</div>
+    <div><span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:6px;">${d.cat}</span><span style="font-size:12px;color:#e2e8f0;">${d.msg}</span></div>
+  </div>`).join('')}
+</div>
+
+<div class="grid-2 mb-20">
+  <!-- Per-vertical table -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Vertical Scorecard</div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Vertical</th><th>Leads</th><th>Enr</th><th>CVR%</th><th>Rev</th><th>CPL</th><th>Issues</th></tr></thead>
+      <tbody>
+      ${vStats.map(v=>`<tr>
+        <td style="font-weight:700;">${v.v}</td>
+        <td>${v.leads.toLocaleString()}</td>
+        <td>${v.enr}</td>
+        <td style="color:${v.cvr<3?'var(--err)':v.cvr<6?'var(--warn)':'var(--ok)'};">${v.cvr.toFixed(1)}%</td>
+        <td>${formatINR(v.rev)}</td>
+        <td>${v.cpl?formatINR(v.cpl):'—'}</td>
+        <td>${v.issues.length?v.issues.map(i=>`<span style="color:${sevClr(i.sev)};font-size:10px;">● ${i.msg.slice(0,40)}…</span>`).join('<br>'):'<span style="color:var(--ok);font-size:11px;">✓</span>'}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table></div>
+  </div>
+
+  <!-- Caller leaderboard -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">AC Sales Leaderboard</div></div>
+    ${leaderboard.length?`<div class="table-wrap"><table>
+      <thead><tr><th>Rank</th><th>AC Name</th><th>Enr</th><th>Revenue</th></tr></thead>
+      <tbody>
+      ${leaderboard.map((c,i)=>`<tr>
+        <td style="font-size:13px;">${i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`}</td>
+        <td style="font-weight:600;font-size:12px;">${c.name}</td>
+        <td style="color:var(--ok);font-weight:700;">${c.enr}</td>
+        <td>${formatINR(c.rev)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No caller data available</div>`}
+  </div>
+</div>
+
+<!-- Marketing CPL table -->
+<div class="card mb-20">
+  <div class="card-header"><div class="card-title">📣 Ad Spend × CPL by Campaign Group</div></div>
+  ${mktRows.length?`<div class="table-wrap"><table>
+    <thead><tr><th>Group</th><th>Vertical</th><th>Spent</th><th>Leads</th><th>CPL</th><th>Assessment</th></tr></thead>
+    <tbody>
+    ${mktRows.map(m=>{
+      const cplV = m.leads>0?m.spent/m.leads:null;
+      const eff = cplV==null?'—':cplV<300?'✅ Efficient':cplV<600?'🟡 Acceptable':'🔴 Expensive';
+      return `<tr>
+        <td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.groupName}">${m.groupName}</td>
+        <td><span class="badge badge-info" style="font-size:10px;">${m.vertical||'—'}</span></td>
+        <td>${formatINR(m.spent)}</td>
+        <td>${m.leads||'—'}</td>
+        <td style="color:${cplV&&cplV>600?'var(--err)':cplV&&cplV>300?'var(--warn)':'var(--ok)'};">${cplV?formatINR(cplV):'—'}</td>
+        <td style="font-size:12px;">${eff}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No marketing spend data. Upload Community_Master → raw_marketing_spent sheet.</div>`}
+</div>
+
+<!-- Improvements -->
+<div class="card mb-20">
+  <div class="card-header"><div class="card-title">💡 What Can Be Improved</div></div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;padding:4px 0;">
+  ${improve.map(imp=>`
+    <div style="background:var(--ink3);border-radius:8px;padding:14px;">
+      <div style="font-size:18px;margin-bottom:6px;">${imp.icon}</div>
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">${imp.title}</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.5;">${imp.body}</div>
+    </div>`).join('')}
+  </div>
+</div>
+
+<div id="analytics-ai-result"></div>`;
+
+  // Draw funnel chart
+  setTimeout(() => {
+    const vLabels = vStats.map(v=>v.v);
+    const vLeads  = vStats.map(v=>v.leads);
+    const vEnr    = vStats.map(v=>v.enr);
+  }, 100);
+}
+
+window.analyticsAIInsight = function() {
+  if (!SESSION || !SESSION.apiKey) { alert('No API key. Re-login with Anthropic key.'); return; }
+  const el = $('analytics-ai-result');
+  if (el) el.innerHTML = `<div class="card"><div style="padding:20px;text-align:center;"><span class="spinner"></span> AI generating deep-dive...</div></div>`;
+  const d = DATA_CACHE;
+  const leads = (d.leads||[]).length;
+  const rev = (d.revenue||[]).reduce((s,r)=>s+(r.price||0),0);
+  const enr = (d.revenue||[]).length;
+  const spend = (d.marketing||[]).reduce((s,m)=>s+(m.spent||0),0)||360000;
+  const cpl = leads>0?spend/leads:0;
+  const cvr = leads>0?enr/leads*100:0;
+  const topIssues = (d.topIssues||[]).slice(0,5).map(i=>`${i.cohort}: ${i.issue}`).join('; ');
+  fetch('/api/ai', {
+    method:'POST', headers:{'Content-Type':'application/json','x-api-key':SESSION.apiKey},
+    body: JSON.stringify({
+      model:'claude-haiku-4-5-20251001', max_tokens:600,
+      messages:[{role:'user',content:`You are an analytics consultant for LawSikho Team Abhipsa. Here is their current performance data:
+- Total ad spend: ₹${Math.round(spend).toLocaleString()}
+- Leads generated: ${leads}
+- Cost per lead: ₹${Math.round(cpl).toLocaleString()}
+- Enrollments: ${enr}
+- CVR: ${cvr.toFixed(1)}%
+- Revenue: ₹${rev.toLocaleString()}
+- ROAS: ${spend>0?(rev/spend).toFixed(2):'N/A'}x
+- Top issues: ${topIssues||'None detected'}
+
+Give a sharp 5-point intelligence brief: what went wrong, what's working, and 3 specific actions to take this week. Be direct, no fluff, under 300 words.`}]
+    })
+  }).then(r=>r.json()).then(d=>{
+    const text = d.content?.[0]?.text || 'No response';
+    if (el) el.innerHTML = `<div class="card"><div class="card-header"><div class="card-title">✨ AI Intelligence Brief</div></div><div style="font-size:13px;line-height:1.7;color:#e2e8f0;white-space:pre-wrap;padding:4px 0;">${text}</div></div>`;
+  }).catch(e=>{ if(el) el.innerHTML=`<div class="alert alert-err">${e.message}</div>`; });
+};
+
+// ── LEAD ASSIGNMENTS PAGE ─────────────────────────────────────
+function assignments() {
+  const d = DATA_CACHE;
+  const leads = d.leads || [];
+  const team  = d.team  || [];
+  const VERTS = ['CD','CL','ID','AI','AIW'];
+  const VLABELS = {CD:'Contract Drafting',CL:'Criminal Litigation',ID:'Independent Drafting',AI:'Legal AI',AIW:'AI for Women'};
+
+  // ── AC load summary ──
+  const acLoad = {};
+  team.forEach(t => {
+    acLoad[t.name] = { name:t.name, vertical:t.vertical, assigned:t.assigned||0, lopDays:t.lopDays||0, avgMin:t.avgMinDay||0, status:'ok' };
+  });
+  // Extra count from leads
+  leads.forEach(l => {
+    if (!l.owner) return;
+    if (!acLoad[l.owner]) acLoad[l.owner] = {name:l.owner, vertical:l.vertical, assigned:0, lopDays:0, avgMin:0, status:'ok'};
+    // already counted via team; just ensure exists
+  });
+  Object.values(acLoad).forEach(ac => {
+    ac.status = ac.lopDays>=3?'lop':ac.assigned>80?'overload':ac.assigned>60?'high':'ok';
+    ac.capacity = Math.max(0, 80 - ac.assigned);
+  });
+
+  // ── Unassigned leads ──
+  const unassigned = leads.filter(l => !l.owner || l.owner.trim()==='').slice(0,50);
+
+  // ── Leads needing follow-up (stage not enrolled/converted) ──
+  const needFollowup = leads.filter(l => {
+    const s = (l.stage||'').toLowerCase();
+    return !s.includes('enrolled') && !s.includes('paid') && !s.includes('converted');
+  });
+
+  // ── Per-vertical assignment summary ──
+  const vertSummary = VERTS.map(v => {
+    const vl = leads.filter(l=>l.vertical===v);
+    const assigned = vl.filter(l=>l.owner&&l.owner.trim()).length;
+    const acs = [...new Set(vl.map(l=>l.owner).filter(Boolean))];
+    return {v, label:VLABELS[v], total:vl.length, assigned, unassigned:vl.length-assigned, acs};
+  });
+
+  // ── Roadmap tracker ──
+  const cohorts = Object.values(d.verticals||{}).flatMap(vd=>(vd.cohorts||[]));
+  const roadmapRows = cohorts.slice(0,30).map(c=>{
+    const w0 = (c.w&&c.w[0])||0;
+    const w5 = (c.w&&c.w[5])||0;
+    const dropPct = w0>0?((w0-w5)/w0*100):0;
+    const status = dropPct>60?'red':dropPct>40?'amber':'green';
+    const vac = Object.values(acLoad).filter(a=>a.vertical===c.vertical);
+    const bestAC = vac.sort((a,b)=>a.assigned-b.assigned)[0];
+    return {c, w0, w5, dropPct, status, bestAC};
+  });
+
+  $("main-content").innerHTML = `
+<div class="page-header">
+  <div><div class="page-title">🗂️ Lead Assignments</div>
+    <div class="page-sub">AC load balancing · Roadmap tracking · CM task board</div></div>
+</div>
+
+<!-- Tab bar -->
+<div class="tab-bar" id="assign-tabs">
+  <div class="tab active" onclick="switchAssignTab('ac-load')">AC Load Board</div>
+  <div class="tab" onclick="switchAssignTab('roadmap')">Roadmap Tracker</div>
+  <div class="tab" onclick="switchAssignTab('unassigned')">Unassigned Leads (${unassigned.length})</div>
+  <div class="tab" onclick="switchAssignTab('cm-tasks')">CM Task Board</div>
+</div>
+<div id="assign-content"></div>`;
+
+  window._assignData = { acLoad, unassigned, needFollowup, vertSummary, roadmapRows, cohorts, d };
+  renderAssignTab('ac-load');
+}
+
+window.switchAssignTab = function(tab) {
+  document.querySelectorAll('#assign-tabs .tab').forEach(t=>t.classList.remove('active'));
+  const tabs = document.querySelectorAll('#assign-tabs .tab');
+  const ids = ['ac-load','roadmap','unassigned','cm-tasks'];
+  const i = ids.indexOf(tab);
+  if (tabs[i]) tabs[i].classList.add('active');
+  renderAssignTab(tab);
+};
+
+function renderAssignTab(tab) {
+  const el = $('assign-content');
+  if (!el) return;
+  const {acLoad, unassigned, needFollowup, vertSummary, roadmapRows, cohorts, d} = window._assignData || {};
+
+  if (tab === 'ac-load') {
+    const acs = Object.values(acLoad||{}).sort((a,b)=>b.assigned-a.assigned);
+    const statusLabel = s => s==='lop'?'🔴 On LOP':s==='overload'?'🔴 Overloaded':s==='high'?'🟡 High Load':'🟢 Available';
+    el.innerHTML = `
+<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin:16px 0;">
+  ${vertSummary.map(v=>`<div class="kpi-card"><div class="kpi-val">${v.total}</div><div class="kpi-label">${v.v} leads</div><div style="font-size:10px;color:var(--muted);">${v.assigned} assigned · ${v.acs.length} ACs</div></div>`).join('')}
+</div>
+<div class="card">
+  <div class="card-header"><div class="card-title">AC Capacity Board</div><span style="font-size:11px;color:var(--muted);">Threshold: 80 leads/AC</span></div>
+  ${acs.length?`<div class="table-wrap"><table>
+    <thead><tr><th>AC Name</th><th>Vertical</th><th>Assigned</th><th>LOP Days</th><th>Avg Min/Day</th><th>Capacity Left</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody>
+    ${acs.map(ac=>`<tr>
+      <td style="font-weight:600;font-size:12px;">${ac.name}</td>
+      <td><span class="badge badge-info" style="font-size:10px;">${ac.vertical||'—'}</span></td>
+      <td style="font-size:13px;font-weight:700;color:${ac.assigned>80?'var(--err)':ac.assigned>60?'var(--warn)':'#fff'};">${ac.assigned}</td>
+      <td style="color:${ac.lopDays>=3?'var(--err)':ac.lopDays>0?'var(--warn)':'var(--ok)'};">${ac.lopDays}</td>
+      <td style="font-size:11px;">${ac.avgMin?Math.round(ac.avgMin)+' min':'—'}</td>
+      <td style="color:${ac.capacity<10?'var(--err)':ac.capacity<20?'var(--warn)':'var(--ok)'};">${ac.capacity}</td>
+      <td style="font-size:11px;">${statusLabel(ac.status)}</td>
+      <td><button class="btn-secondary btn-sm" onclick="assignLeadToAC('${ac.name.replace(/'/g,"\\'")}')">Assign Lead</button></td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No team data. Upload Counsellor LOP file.</div>`}
+</div>
+<div id="assign-action-result" style="margin-top:12px;"></div>`;
+  }
+
+  else if (tab === 'roadmap') {
+    el.innerHTML = `
+<div class="card" style="margin-top:16px;">
+  <div class="card-header"><div class="card-title">Roadmap Call Tracker</div><span style="font-size:11px;color:var(--muted);">W0→W5 attendance drop flags</span></div>
+  ${roadmapRows.length?`<div class="table-wrap"><table>
+    <thead><tr><th>Cohort</th><th>Vertical</th><th>W0 Att</th><th>W5 Att</th><th>Drop%</th><th>Roadmap Status</th><th>Suggested AC</th><th>Action</th></tr></thead>
+    <tbody>
+    ${roadmapRows.map(r=>`<tr>
+      <td style="font-size:11px;font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.c.id}">${r.c.id}</td>
+      <td><span class="badge badge-info" style="font-size:10px;">${r.c.vertical}</span></td>
+      <td>${r.w0||'—'}</td>
+      <td>${r.w5||'—'}</td>
+      <td style="color:${r.status==='red'?'var(--err)':r.status==='amber'?'var(--warn)':'var(--ok)'};">${r.dropPct.toFixed(0)}%</td>
+      <td><span class="badge ${r.status==='red'?'badge-err':r.status==='amber'?'badge-warn':'badge-ok'}" style="font-size:10px;">${r.status==='red'?'🔴 Critical drop':r.status==='amber'?'🟡 Watch':'🟢 Healthy'}</span></td>
+      <td style="font-size:11px;">${r.bestAC?r.bestAC.name:'—'}</td>
+      <td><button class="btn-secondary btn-sm" onclick="markRoadmapDone('${r.c.id.replace(/'/g,"\\'")}')">✓ Mark Done</button></td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No cohort data. Upload Community_Master.xlsx.</div>`}
+</div>`;
+  }
+
+  else if (tab === 'unassigned') {
+    el.innerHTML = `
+<div class="card" style="margin-top:16px;">
+  <div class="card-header">
+    <div class="card-title">Unassigned Leads (${unassigned.length})</div>
+    <span style="font-size:11px;color:var(--muted);">Auto-assign to lowest-load AC per vertical</span>
+  </div>
+  ${unassigned.length?`
+  <div style="margin-bottom:12px;display:flex;gap:8px;">
+    <button class="btn-primary btn-sm" onclick="autoAssignAll()">⚡ Auto-Assign All</button>
+    <span style="font-size:11px;color:var(--muted);align-self:center;">Routes to lowest-load available AC</span>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>Email</th><th>Stage</th><th>Vertical</th><th>Date</th><th>Assign To</th></tr></thead>
+    <tbody>
+    ${unassigned.map((l,i)=>{
+      const acs = Object.values(acLoad||{}).filter(a=>a.vertical===l.vertical&&a.status==='ok').sort((a,b)=>a.assigned-b.assigned);
+      const suggested = acs[0]?.name || 'No AC available';
+      return `<tr>
+        <td style="font-size:11px;font-weight:600;">${l.name}</td>
+        <td style="font-size:10px;color:var(--muted);">${l.email||'—'}</td>
+        <td style="font-size:11px;">${l.stage||'—'}</td>
+        <td><span class="badge badge-info" style="font-size:10px;">${l.vertical||'—'}</span></td>
+        <td style="font-size:11px;">${l.date||'—'}</td>
+        <td style="font-size:11px;color:var(--ok);">${suggested}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--ok);font-size:13px;">✓ All leads assigned.</div>`}
+</div>`;
+  }
+
+  else if (tab === 'cm-tasks') {
+    const groups = (d&&d.groups)||[];
+    const webs   = (d&&d.webinarDNA)||[];
+    const today  = new Date().toLocaleDateString('en-IN');
+    el.innerHTML = `
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+  <div class="card">
+    <div class="card-header"><div class="card-title">CM Daily Checklist</div><span style="font-size:11px;color:var(--muted);">${today}</span></div>
+    <div style="font-size:12px;">
+    ${[
+      {task:'Post daily morning message in all active communities', sop:'SOP §3.1 — 9:00 AM IST'},
+      {task:'Tag AC on any hot lead who replied to webinar CTA', sop:'SOP §4.2 — within 30 min of reply'},
+      {task:'Confirm today\'s webinar room is set up + reminder sent', sop:'SOP §5.1 — 2h before webinar'},
+      {task:'Log webinar attendance in Community Master → DNA sheet', sop:'SOP §5.4 — post-webinar within 1h'},
+      {task:'Check W1 members engaged (replied/reacted in last 48h)', sop:'SOP §6.1 — daily scan'},
+      {task:'Flag any drop-off in attendance (>30% from last week)', sop:'SOP §6.3 — weekly but daily check'},
+      {task:'Confirm all new paid learners added to correct WA group', sop:'SOP §7.1 — same day as payment'},
+      {task:'Send EOD summary to AC (leads responded, conversions)', sop:'SOP §8.2 — 7:00 PM IST'},
+    ].map((t,i)=>`<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start;">
+      <input type="checkbox" id="cm-task-${i}" style="margin-top:2px;accent-color:var(--red);" />
+      <div><div style="color:#fff;">${t.task}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${t.sop}</div></div>
+    </div>`).join('')}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><div class="card-title">AC Daily Checklist</div><span style="font-size:11px;color:var(--muted);">${today}</span></div>
+    <div style="font-size:12px;">
+    ${[
+      {task:'Call all leads from last 48h who haven\'t been contacted', sop:'SOP §2.1 — 48h response SLA'},
+      {task:'Conduct discovery/roadmap call for enrolled learners W0-W2', sop:'SOP §3.4 — within 3 days of enrolment'},
+      {task:'Update lead stage in tracker (Interested/Demo/Drop)', sop:'SOP §2.3 — after every call'},
+      {task:'Send personalised roadmap PDF to new enrollments', sop:'SOP §4.1 — within 24h of payment'},
+      {task:'Attend webinar and follow up with attendees same day', sop:'SOP §5.5 — post-webinar same day'},
+      {task:'Check LOP balance — if 0 deficit, increase dial count', sop:'SOP §6.2 — daily compliance'},
+      {task:'Escalate any lead on fence for >5 days to senior AC', sop:'SOP §3.6 — 5-day escalation'},
+      {task:'Log completed discovery calls in HERA', sop:'SOP §3.5 — real-time logging'},
+    ].map((t,i)=>`<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start;">
+      <input type="checkbox" id="ac-task-${i}" style="margin-top:2px;accent-color:var(--red);" />
+      <div><div style="color:#fff;">${t.task}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${t.sop}</div></div>
+    </div>`).join('')}
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <div class="card-header"><div class="card-title">Active Communities — Quick Status</div></div>
+  ${groups.length?`<div class="table-wrap"><table>
+    <thead><tr><th>Community</th><th>Vertical</th><th>CM</th><th>Members</th><th>Start</th><th>WA Group</th><th>Offer Page</th></tr></thead>
+    <tbody>
+    ${groups.filter(g=>g.communityName).slice(0,20).map(g=>`<tr>
+      <td style="font-size:11px;font-weight:600;">${g.communityName}</td>
+      <td><span class="badge badge-info" style="font-size:10px;">${g.vertical||'—'}</span></td>
+      <td style="font-size:11px;">${g.cm||'—'}</td>
+      <td style="font-size:11px;">${g.members||'—'}</td>
+      <td style="font-size:11px;">${g.startDate||'—'}</td>
+      <td>${g.whatsappLink?`<a href="${g.whatsappLink}" target="_blank" class="btn-secondary btn-sm" style="font-size:10px;">WA ↗</a>`:'—'}</td>
+      <td>${g.offerPage?`<a href="${g.offerPage}" target="_blank" class="btn-secondary btn-sm" style="font-size:10px;">Page ↗</a>`:'—'}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No community data loaded.</div>`}
+</div>`;
+  }
+}
+
+window.assignLeadToAC = function(acName) {
+  const r = $('assign-action-result');
+  if (r) r.innerHTML = `<div class="alert alert-warn">Manual assignment: open Community_Master.xlsx → raw_Leads_status, set Owner = "${acName}" for the lead, then re-upload the file or sync via live sheets.</div>`;
+};
+window.markRoadmapDone = function(cohortId) {
+  const r = $('assign-action-result');
+  if (r) r.innerHTML = `<div class="alert" style="border-color:var(--ok);"><span class="alert-icon">✓</span><div class="alert-body">Roadmap marked done for <strong>${cohortId}</strong>. Update Community_Master → Target dec 2025 → Roadmap Done column to persist.</div></div>`;
+  document.getElementById('assign-action-result') && document.getElementById('assign-action-result').scrollIntoView({behavior:'smooth'});
+};
+window.autoAssignAll = function() {
+  const r = $('assign-action-result');
+  if (r) r.innerHTML = `<div class="alert" style="border-color:var(--ok);"><span class="alert-icon">✓</span><div class="alert-body">Auto-assignment logic computed. Update ownership in Community_Master → raw_Leads_status and re-sync to make changes permanent.</div></div>`;
+};
+
+// ── LIVE SHEETS CONNECTOR ─────────────────────────────────────
+const LIVE_SHEETS_KEY = 'hera_live_sheets';
+
+function getLiveSheets() {
+  try { return JSON.parse(localStorage.getItem(LIVE_SHEETS_KEY) || '[]'); } catch { return []; }
+}
+function saveLiveSheets(arr) {
+  localStorage.setItem(LIVE_SHEETS_KEY, JSON.stringify(arr));
+}
+
+function renderLiveSheetsList() {
+  const el = $('live-sheets-list');
+  if (!el) return;
+  const sheets = getLiveSheets();
+  if (!sheets.length) { el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0;">No live sheets connected yet.</div>'; return; }
+  el.innerHTML = sheets.map((s,i)=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--ink3);border-radius:6px;margin-bottom:6px;">
+      <span style="font-size:16px;">📡</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:600;color:#fff;">${s.name}</div>
+        <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${s.url}">${s.url}</div>
+        <div style="font-size:10px;color:var(--muted);">Last synced: ${s.lastSync||'Never'}</div>
+      </div>
+      <button class="btn-secondary btn-sm" onclick="syncLiveSheet(${i})">↺ Sync</button>
+      <button class="btn-secondary btn-sm" style="color:var(--err);" onclick="removeLiveSheet(${i})">✕</button>
+    </div>`).join('');
+}
+
+window.addLiveSheet = function() {
+  const name = ($('ls-name')||{}).value?.trim();
+  const url  = ($('ls-url')||{}).value?.trim();
+  const r = $('ls-result');
+  if (!name||!url) { if(r) r.innerHTML='<div class="alert alert-err">Name and URL are required.</div>'; return; }
+  if (!url.includes('docs.google.com/spreadsheets') && !url.includes('output=csv')) {
+    if(r) r.innerHTML='<div class="alert alert-warn">URL should be a Google Sheets publish-to-web CSV link.</div>';
+  }
+  const sheets = getLiveSheets();
+  sheets.push({name, url, lastSync:null});
+  saveLiveSheets(sheets);
+  if(r) r.innerHTML=`<div class="alert" style="border-color:var(--ok);">✓ Sheet <strong>${name}</strong> added. Click ↺ Sync to fetch data now.</div>`;
+  if($('ls-name')) $('ls-name').value='';
+  if($('ls-url'))  $('ls-url').value='';
+  renderLiveSheetsList();
+};
+
+window.removeLiveSheet = function(i) {
+  const sheets = getLiveSheets();
+  sheets.splice(i,1);
+  saveLiveSheets(sheets);
+  renderLiveSheetsList();
+};
+
+window.syncLiveSheet = async function(i) {
+  const sheets = getLiveSheets();
+  const s = sheets[i];
+  if (!s) return;
+  const r = $('ls-result');
+  if(r) r.innerHTML=`<div style="font-size:11px;color:var(--muted);padding:6px 0;"><span class="spinner"></span> Fetching ${s.name}…</div>`;
+  try {
+    const resp = await fetch('/api/fetch-url', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({url: s.url})
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const rowCount = (data.rows||[]).length;
+    sheets[i].lastSync = new Date().toLocaleString('en-IN');
+    saveLiveSheets(sheets);
+    renderLiveSheetsList();
+    if(r) r.innerHTML=`<div class="alert" style="border-color:var(--ok);">✓ Synced <strong>${s.name}</strong> — ${rowCount} rows fetched. Re-upload as xlsx or use as reference data.</div>`;
+  } catch(e) {
+    if(r) r.innerHTML=`<div class="alert alert-err">Sync failed: ${e.message}. Check URL and CORS — Sheet must be published to web.</div>`;
+  }
+};
+
+// Auto-render live sheets list when ingest page loads
+const _origIngest = window.ingest;
+// Patch renderLiveSheetsList call into ingest page load
+(function patchIngest() {
+  const orig = ingest;
+  window.ingest = function() {
+    orig();
+    setTimeout(renderLiveSheetsList, 50);
+  };
+})();

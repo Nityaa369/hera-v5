@@ -1561,6 +1561,39 @@ if (process.env.GROWTHX_TOKEN) {
   INTEGRATIONS.growthx.apiKey = process.env.GROWTHX_TOKEN;
 }
 
+// ── Google Sheets CSV proxy (avoids CORS) ──────────────────────
+app.post('/api/fetch-url', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url required' });
+  const allowed = /^https:\/\/docs\.google\.com\/spreadsheets\//;
+  if (!allowed.test(url)) return res.status(403).json({ error: 'Only Google Sheets publish URLs are allowed' });
+  try {
+    const https = require('https');
+    const fetchUrl = (u) => new Promise((resolve, reject) => {
+      https.get(u, { headers: { 'User-Agent': 'HERA/5' } }, (r) => {
+        if (r.statusCode === 301 || r.statusCode === 302) return resolve(fetchUrl(r.headers.location));
+        let body = '';
+        r.on('data', d => body += d);
+        r.on('end', () => resolve({ status: r.statusCode, body }));
+      }).on('error', reject);
+    });
+    const result = await fetchUrl(url);
+    if (result.status !== 200) return res.status(502).json({ error: `Upstream ${result.status}` });
+    // Parse CSV into rows array
+    const lines = result.body.split('\n').filter(Boolean);
+    const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim());
+    const rows = lines.slice(1).map(line => {
+      const vals = line.split(',').map(v => v.replace(/^"|"$/g, '').trim());
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+      return obj;
+    });
+    res.json({ headers, rows, rowCount: rows.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log('HERA v5 running on port ' + PORT);
   console.log('Dev mode:', IS_DEV ? 'ON (1-minute cron)' : 'OFF (3-hour cron)');
