@@ -1317,7 +1317,22 @@ function loadStaticDataOnStartup() {
       });
     }
     DATA.syncedAt = sd.seededAt;
+
+    // Reset vertical sub-arrays then distribute from flat arrays (same as parseAllFiles)
+    ['CD','CL','ID','AI','AIW'].forEach(v => {
+      DATA.verticals[v].pipeline = [];
+      DATA.verticals[v].revenue  = [];
+      DATA.verticals[v].webinars = [];
+      DATA.verticals[v].team     = [];
+    });
+    buildTeamFromData();
+    DATA.revenue.forEach(r  => { if (DATA.verticals[r.vertical])  DATA.verticals[r.vertical].revenue.push(r); });
+    DATA.webinarDNA.forEach(w => { if (DATA.verticals[w.vertical]) DATA.verticals[w.vertical].webinars.push(w); });
+    DATA.leads.forEach(l    => { if (DATA.verticals[l.vertical])   DATA.verticals[l.vertical].pipeline.push(l); });
+    DATA.team.forEach(t     => { if (t.vertical && DATA.verticals[t.vertical]) DATA.verticals[t.vertical].team.push(t); });
+
     console.log(`Static data loaded: ${DATA.leads.length} leads, ${DATA.revenue.length} revenue, ${DATA.webinarDNA.length} webinars`);
+    console.log(`Verticals populated: ${['CD','CL','ID','AI','AIW'].map(v=>`${v}:${DATA.verticals[v].pipeline.length}leads/${DATA.verticals[v].revenue.length}rev`).join(' ')}`);
   } catch(e) { console.warn('loadStaticDataOnStartup failed:', e.message); }
 }
 
