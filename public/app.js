@@ -2488,79 +2488,133 @@ Give a sharp 5-point intelligence brief: what went wrong, what's working, and 3 
 // ── LEAD ASSIGNMENTS PAGE ─────────────────────────────────────
 function assignments() {
   const d = DATA_CACHE;
-  const leads = d.leads || [];
-  const team  = d.team  || [];
+  const leads       = d.leads        || [];
+  const team        = d.team         || [];
+  const assignData  = d.assignments  || [];   // AC→community from seed
+  const acDials     = d.acDailyDials || [];
+  const acCapData   = d.acLeadCap    || [];
+  const cmPosting   = d.cmPostingLog || [];
+  const roadmapCallsData = d.roadmapCalls || [];
   const VERTS = ['CD','CL','ID','AI','AIW'];
   const VLABELS = {CD:'Contract Drafting',CL:'Criminal Litigation',ID:'Independent Drafting',AI:'Legal AI',AIW:'AI for Women'};
 
-  // ── AC load summary ──
+  // ── AC load summary — seed data takes priority over lead-owner counts ──
   const acLoad = {};
+
+  // Seed team data
   team.forEach(t => {
-    acLoad[t.name] = { name:t.name, vertical:t.vertical, assigned:t.assigned||0, lopDays:t.lopDays||0, avgMin:t.avgMinDay||0, status:'ok' };
+    if (!t.name) return;
+    acLoad[t.name] = {
+      name:t.name, role:t.role||'AC', vertical:t.vertical||'',
+      assigned:t.assigned||0, lopDays:t.lopDays||0, avgMin:t.avgMinDay||0,
+      roadmapDone:t.roadmapDone||0, conversions:t.conversions||0,
+      communities: t.communities||[], status:'ok', capacity:80
+    };
   });
-  // Extra count from leads
-  leads.forEach(l => {
-    if (!l.owner) return;
-    if (!acLoad[l.owner]) acLoad[l.owner] = {name:l.owner, vertical:l.vertical, assigned:0, lopDays:0, avgMin:0, status:'ok'};
-    // already counted via team; just ensure exists
+
+  // Enrich from assignments table (actual AC→community data)
+  assignData.forEach(a => {
+    if (!a.acName) return;
+    if (!acLoad[a.acName]) acLoad[a.acName] = {
+      name:a.acName, role:'AC', vertical:a.vertical||'',
+      assigned:0, lopDays:0, avgMin:0, roadmapDone:0, conversions:0, communities:[], status:'ok', capacity:80
+    };
+    const ac = acLoad[a.acName];
+    ac.assigned = Math.max(ac.assigned, a.assignedLeads||0);
+    ac.roadmapDone = (ac.roadmapDone||0) + (a.roadmapDone||0);
+    ac.conversions = (ac.conversions||0) + (a.conversions||0);
+    if (!ac.communities.includes(a.community)) ac.communities.push(a.community);
+    if (!ac.vertical || ac.vertical==='Other') ac.vertical = a.vertical||'';
   });
+
+  // Enrich from latest lead cap entry per AC
+  const latestCap = {};
+  acCapData.forEach(c => { if (c.acName) latestCap[c.acName] = c; });
+  Object.values(latestCap).forEach(c => {
+    if (!acLoad[c.acName]) acLoad[c.acName] = {name:c.acName,role:'AC',vertical:c.vertical||'',assigned:0,lopDays:0,avgMin:0,roadmapDone:0,conversions:0,communities:[],status:'ok',capacity:80};
+    acLoad[c.acName].assigned = Math.max(acLoad[c.acName].assigned, c.leadCount||0);
+    acLoad[c.acName].capStatus = c.capStatus||'';
+    acLoad[c.acName].communityDay = c.communityDay||0;
+    acLoad[c.acName].daysLeft = c.daysLeftPhase2||0;
+  });
+
+  // Compute status & capacity
   Object.values(acLoad).forEach(ac => {
     ac.status = ac.lopDays>=3?'lop':ac.assigned>80?'overload':ac.assigned>60?'high':'ok';
     ac.capacity = Math.max(0, 80 - ac.assigned);
+    ac.roadmapRate = ac.assigned>0 ? Math.round((ac.roadmapDone/ac.assigned)*100) : 0;
+    ac.cvr = ac.assigned>0 ? Math.round((ac.conversions/ac.assigned)*100) : 0;
   });
+
+  // ── Latest dials per AC ──
+  const latestDials = {};
+  acDials.forEach(d2 => { if (d2.acName) latestDials[d2.acName] = d2; });
 
   // ── Unassigned leads ──
-  const unassigned = leads.filter(l => !l.owner || l.owner.trim()==='').slice(0,50);
+  const unassigned = leads.filter(l => !l.owner || l.owner.trim()==='').slice(0,60);
 
-  // ── Leads needing follow-up (stage not enrolled/converted) ──
-  const needFollowup = leads.filter(l => {
-    const s = (l.stage||'').toLowerCase();
-    return !s.includes('enrolled') && !s.includes('paid') && !s.includes('converted');
-  });
-
-  // ── Per-vertical assignment summary ──
+  // ── Per-vertical summary ──
   const vertSummary = VERTS.map(v => {
     const vl = leads.filter(l=>l.vertical===v);
     const assigned = vl.filter(l=>l.owner&&l.owner.trim()).length;
     const acs = [...new Set(vl.map(l=>l.owner).filter(Boolean))];
-    return {v, label:VLABELS[v], total:vl.length, assigned, unassigned:vl.length-assigned, acs};
+    const vasgn = assignData.filter(a=>a.vertical===v);
+    const totalAssigned = vasgn.reduce((s,a)=>s+(a.assignedLeads||0),0);
+    const totalRoadmap = vasgn.reduce((s,a)=>s+(a.roadmapDone||0),0);
+    const totalConv = vasgn.reduce((s,a)=>s+(a.conversions||0),0);
+    return {v, label:VLABELS[v], total:vl.length, assigned, unassigned:vl.length-assigned,
+            acs, totalAssigned, totalRoadmap, totalConv};
   });
 
-  // ── Roadmap tracker ──
-  const cohorts = Object.values(d.verticals||{}).flatMap(vd=>(vd.cohorts||[]));
-  const roadmapRows = cohorts.slice(0,30).map(c=>{
-    const w0 = (c.w&&c.w[0])||0;
-    const w5 = (c.w&&c.w[5])||0;
-    const dropPct = w0>0?((w0-w5)/w0*100):0;
-    const status = dropPct>60?'red':dropPct>40?'amber':'green';
-    const vac = Object.values(acLoad).filter(a=>a.vertical===c.vertical);
-    const bestAC = vac.sort((a,b)=>a.assigned-b.assigned)[0];
-    return {c, w0, w5, dropPct, status, bestAC};
+  // ── Roadmap tracker from assignments data ──
+  const communityRoadmapMap = {};
+  assignData.forEach(a => {
+    if (!communityRoadmapMap[a.community]) communityRoadmapMap[a.community] = {
+      community:a.community, vertical:a.vertical, totalAssigned:0, totalRoadmap:0, totalConv:0, acs:[]
+    };
+    const c = communityRoadmapMap[a.community];
+    c.totalAssigned += a.assignedLeads||0;
+    c.totalRoadmap += a.roadmapDone||0;
+    c.totalConv += a.conversions||0;
+    c.acs.push({name:a.acName, assigned:a.assignedLeads, roadmap:a.roadmapDone, conv:a.conversions});
   });
+  const roadmapRows = Object.values(communityRoadmapMap).map(c => ({
+    ...c,
+    roadmapRate: c.totalAssigned>0 ? Math.round(c.totalRoadmap/c.totalAssigned*100) : 0,
+    cvr: c.totalAssigned>0 ? Math.round(c.totalConv/c.totalAssigned*100) : 0,
+    status: c.totalAssigned>0 && c.totalRoadmap/c.totalAssigned<0.5 ? 'red' :
+            c.totalAssigned>0 && c.totalRoadmap/c.totalAssigned<0.75 ? 'amber' : 'green'
+  }));
+
+  const totalACs = Object.values(acLoad).filter(a=>a.role!=='CM').length;
+  const overloaded = Object.values(acLoad).filter(a=>a.status==='overload'||a.status==='lop').length;
+  const totalRoadmapCalls = roadmapCallsData.length;
 
   $("main-content").innerHTML = `
 <div class="page-header">
   <div><div class="page-title">🗂️ Lead Assignments</div>
-    <div class="page-sub">AC load balancing · Roadmap tracking · CM task board</div></div>
+    <div class="page-sub">${totalACs} ACs · ${overloaded} overloaded · ${totalRoadmapCalls} roadmap calls logged</div></div>
 </div>
-
+<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:16px;">
+  ${vertSummary.map(v=>`<div class="kpi-card"><div class="kpi-val" style="font-size:18px;">${v.totalAssigned||v.total}</div><div class="kpi-label">${v.v} assigned</div><div style="font-size:10px;color:var(--muted);">Roadmap ${v.totalRoadmap} · Conv ${v.totalConv}</div></div>`).join('')}
+</div>
 <!-- Tab bar -->
 <div class="tab-bar" id="assign-tabs">
-  <div class="tab active" onclick="switchAssignTab('ac-load')">AC Load Board</div>
-  <div class="tab" onclick="switchAssignTab('roadmap')">Roadmap Tracker</div>
-  <div class="tab" onclick="switchAssignTab('unassigned')">Unassigned Leads (${unassigned.length})</div>
-  <div class="tab" onclick="switchAssignTab('cm-tasks')">CM Task Board</div>
+  <div class="tab active" onclick="switchAssignTab('ac-load')">AC Load Board (${totalACs})</div>
+  <div class="tab" onclick="switchAssignTab('roadmap')">Roadmap by Community (${roadmapRows.length})</div>
+  <div class="tab" onclick="switchAssignTab('roadmap-calls')">Roadmap Calls (${totalRoadmapCalls})</div>
+  <div class="tab" onclick="switchAssignTab('cm-tasks')">CM Board</div>
 </div>
 <div id="assign-content"></div>`;
 
-  window._assignData = { acLoad, unassigned, needFollowup, vertSummary, roadmapRows, cohorts, d };
+  window._assignData = { acLoad, latestDials, unassigned, vertSummary, roadmapRows, roadmapCallsData, cmPosting, d };
   renderAssignTab('ac-load');
 }
 
 window.switchAssignTab = function(tab) {
   document.querySelectorAll('#assign-tabs .tab').forEach(t=>t.classList.remove('active'));
   const tabs = document.querySelectorAll('#assign-tabs .tab');
-  const ids = ['ac-load','roadmap','unassigned','cm-tasks'];
+  const ids = ['ac-load','roadmap','roadmap-calls','cm-tasks'];
   const i = ids.indexOf(tab);
   if (tabs[i]) tabs[i].classList.add('active');
   renderAssignTab(tab);
@@ -2569,109 +2623,138 @@ window.switchAssignTab = function(tab) {
 function renderAssignTab(tab) {
   const el = $('assign-content');
   if (!el) return;
-  const {acLoad, unassigned, needFollowup, vertSummary, roadmapRows, cohorts, d} = window._assignData || {};
+  const {acLoad, latestDials, unassigned, vertSummary, roadmapRows, roadmapCallsData, cmPosting, d} = window._assignData || {};
 
   if (tab === 'ac-load') {
     const acs = Object.values(acLoad||{}).sort((a,b)=>b.assigned-a.assigned);
     const statusLabel = s => s==='lop'?'🔴 On LOP':s==='overload'?'🔴 Overloaded':s==='high'?'🟡 High Load':'🟢 Available';
     el.innerHTML = `
-<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin:16px 0;">
-  ${vertSummary.map(v=>`<div class="kpi-card"><div class="kpi-val">${v.total}</div><div class="kpi-label">${v.v} leads</div><div style="font-size:10px;color:var(--muted);">${v.assigned} assigned · ${v.acs.length} ACs</div></div>`).join('')}
-</div>
-<div class="card">
-  <div class="card-header"><div class="card-title">AC Capacity Board</div><span style="font-size:11px;color:var(--muted);">Threshold: 80 leads/AC</span></div>
+<div class="card" style="margin-top:12px;">
+  <div class="card-header"><div class="card-title">AC Capacity & Conversion Board</div><span style="font-size:11px;color:var(--muted);">Cap threshold: 80 leads · Roadmap SLA: 100%</span></div>
   ${acs.length?`<div class="table-wrap"><table>
-    <thead><tr><th>AC Name</th><th>Vertical</th><th>Assigned</th><th>LOP Days</th><th>Avg Min/Day</th><th>Capacity Left</th><th>Status</th><th>Action</th></tr></thead>
+    <thead><tr><th>AC Name</th><th>Vertical</th><th>Communities</th><th>Assigned</th><th>Roadmap Done</th><th>Roadmap%</th><th>Conversions</th><th>CVR%</th><th>LOP Days</th><th>Capacity</th><th>Status</th></tr></thead>
     <tbody>
-    ${acs.map(ac=>`<tr>
+    ${acs.filter(ac=>ac.role!=='CM').map(ac=>{
+      const dials = (latestDials||{})[ac.name];
+      return `<tr>
+        <td style="font-weight:600;font-size:12px;white-space:nowrap;">${ac.name}</td>
+        <td><span class="badge badge-info" style="font-size:10px;">${ac.vertical||'—'}</span></td>
+        <td style="font-size:10px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(ac.communities||[]).join(', ')}">${(ac.communities||[]).slice(0,2).join(', ')||'—'}</td>
+        <td style="font-size:13px;font-weight:700;color:${ac.assigned>80?'var(--err)':ac.assigned>60?'var(--warn)':'#fff'};">${ac.assigned}</td>
+        <td>${ac.roadmapDone||0}</td>
+        <td style="color:${ac.roadmapRate<50?'var(--err)':ac.roadmapRate<75?'var(--warn)':'var(--ok)'};">${ac.roadmapRate}%</td>
+        <td style="font-weight:700;color:var(--ok);">${ac.conversions||0}</td>
+        <td style="color:${ac.cvr<3?'var(--err)':ac.cvr<6?'var(--warn)':'var(--ok)'};">${ac.cvr}%</td>
+        <td style="color:${ac.lopDays>=3?'var(--err)':ac.lopDays>0?'var(--warn)':'var(--ok)'};">${ac.lopDays||0}</td>
+        <td style="color:${ac.capacity<10?'var(--err)':ac.capacity<20?'var(--warn)':'var(--ok)'};">${ac.capacity}</td>
+        <td style="font-size:11px;">${statusLabel(ac.status)}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No AC data. Ensure AC_Monitoring_Tracker.xlsx and nitya requirements files are in data/.</div>`}
+</div>
+<div class="card" style="margin-top:12px;">
+  <div class="card-header"><div class="card-title">CM Board</div></div>
+  ${acs.filter(ac=>ac.role==='CM').length?`<div class="table-wrap"><table>
+    <thead><tr><th>CM Name</th><th>Communities</th><th>LOP Days</th></tr></thead>
+    <tbody>
+    ${acs.filter(ac=>ac.role==='CM').map(ac=>`<tr>
       <td style="font-weight:600;font-size:12px;">${ac.name}</td>
-      <td><span class="badge badge-info" style="font-size:10px;">${ac.vertical||'—'}</span></td>
-      <td style="font-size:13px;font-weight:700;color:${ac.assigned>80?'var(--err)':ac.assigned>60?'var(--warn)':'#fff'};">${ac.assigned}</td>
-      <td style="color:${ac.lopDays>=3?'var(--err)':ac.lopDays>0?'var(--warn)':'var(--ok)'};">${ac.lopDays}</td>
-      <td style="font-size:11px;">${ac.avgMin?Math.round(ac.avgMin)+' min':'—'}</td>
-      <td style="color:${ac.capacity<10?'var(--err)':ac.capacity<20?'var(--warn)':'var(--ok)'};">${ac.capacity}</td>
-      <td style="font-size:11px;">${statusLabel(ac.status)}</td>
-      <td><button class="btn-secondary btn-sm" onclick="assignLeadToAC('${ac.name.replace(/'/g,"\\'")}')">Assign Lead</button></td>
+      <td style="font-size:11px;">${(ac.communities||[]).join(', ')||'—'}</td>
+      <td style="color:${ac.lopDays>=3?'var(--err)':ac.lopDays>0?'var(--warn)':'var(--ok)'};">${ac.lopDays||0}</td>
     </tr>`).join('')}
     </tbody>
-  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No team data. Upload Counsellor LOP file.</div>`}
+  </table></div>`:`<div style="font-size:11px;color:var(--muted);padding:10px;">CM data populates from CM_Monitoring_Tracker.xlsx posting log.</div>`}
 </div>
 <div id="assign-action-result" style="margin-top:12px;"></div>`;
   }
 
   else if (tab === 'roadmap') {
     el.innerHTML = `
-<div class="card" style="margin-top:16px;">
-  <div class="card-header"><div class="card-title">Roadmap Call Tracker</div><span style="font-size:11px;color:var(--muted);">W0→W5 attendance drop flags</span></div>
-  ${roadmapRows.length?`<div class="table-wrap"><table>
-    <thead><tr><th>Cohort</th><th>Vertical</th><th>W0 Att</th><th>W5 Att</th><th>Drop%</th><th>Roadmap Status</th><th>Suggested AC</th><th>Action</th></tr></thead>
+<div class="card" style="margin-top:12px;">
+  <div class="card-header"><div class="card-title">Roadmap by Community</div><span style="font-size:11px;color:var(--muted);">Source: nitya requirements → sales team conversion via roamd</span></div>
+  ${roadmapRows&&roadmapRows.length?`<div class="table-wrap"><table>
+    <thead><tr><th>Community</th><th>Vertical</th><th>Assigned</th><th>Roadmap Done</th><th>Roadmap%</th><th>Conversions</th><th>CVR%</th><th>Status</th><th>ACs</th></tr></thead>
     <tbody>
     ${roadmapRows.map(r=>`<tr>
-      <td style="font-size:11px;font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.c.id}">${r.c.id}</td>
-      <td><span class="badge badge-info" style="font-size:10px;">${r.c.vertical}</span></td>
-      <td>${r.w0||'—'}</td>
-      <td>${r.w5||'—'}</td>
-      <td style="color:${r.status==='red'?'var(--err)':r.status==='amber'?'var(--warn)':'var(--ok)'};">${r.dropPct.toFixed(0)}%</td>
-      <td><span class="badge ${r.status==='red'?'badge-err':r.status==='amber'?'badge-warn':'badge-ok'}" style="font-size:10px;">${r.status==='red'?'🔴 Critical drop':r.status==='amber'?'🟡 Watch':'🟢 Healthy'}</span></td>
-      <td style="font-size:11px;">${r.bestAC?r.bestAC.name:'—'}</td>
-      <td><button class="btn-secondary btn-sm" onclick="markRoadmapDone('${r.c.id.replace(/'/g,"\\'")}')">✓ Mark Done</button></td>
+      <td style="font-size:11px;font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.community}">${r.community}</td>
+      <td><span class="badge badge-info" style="font-size:10px;">${r.vertical||'—'}</span></td>
+      <td>${r.totalAssigned}</td>
+      <td>${r.totalRoadmap}</td>
+      <td style="color:${r.roadmapRate<50?'var(--err)':r.roadmapRate<75?'var(--warn)':'var(--ok)'};">${r.roadmapRate}%</td>
+      <td style="font-weight:700;color:var(--ok);">${r.totalConv}</td>
+      <td style="color:${r.cvr<3?'var(--err)':r.cvr<6?'var(--warn)':'var(--ok)'};">${r.cvr}%</td>
+      <td><span class="badge ${r.status==='red'?'badge-err':r.status==='amber'?'badge-warn':'badge-ok'}" style="font-size:10px;">${r.status==='red'?'🔴 Low roadmap':r.status==='amber'?'🟡 Watch':'🟢 OK'}</span></td>
+      <td style="font-size:10px;color:var(--muted);">${r.acs.map(a=>a.name).join(', ')}</td>
     </tr>`).join('')}
     </tbody>
-  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No cohort data. Upload Community_Master.xlsx.</div>`}
+  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No assignment data. Ensure nitya requirements.xlsx is in data/.</div>`}
 </div>`;
   }
 
-  else if (tab === 'unassigned') {
+  else if (tab === 'roadmap-calls') {
+    const calls = (roadmapCallsData||[]).slice(0,100);
     el.innerHTML = `
-<div class="card" style="margin-top:16px;">
+<div class="card" style="margin-top:12px;">
   <div class="card-header">
-    <div class="card-title">Unassigned Leads (${unassigned.length})</div>
-    <span style="font-size:11px;color:var(--muted);">Auto-assign to lowest-load AC per vertical</span>
+    <div class="card-title">Roadmap Calls Log (${(roadmapCallsData||[]).length} total)</div>
+    <span style="font-size:11px;color:var(--muted);">Source: raw_roadmap_datacd — actual calls with PDF + transcript</span>
   </div>
-  ${unassigned.length?`
-  <div style="margin-bottom:12px;display:flex;gap:8px;">
-    <button class="btn-primary btn-sm" onclick="autoAssignAll()">⚡ Auto-Assign All</button>
-    <span style="font-size:11px;color:var(--muted);align-self:center;">Routes to lowest-load available AC</span>
-  </div>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Name</th><th>Email</th><th>Stage</th><th>Vertical</th><th>Date</th><th>Assign To</th></tr></thead>
+  ${calls.length?`<div class="table-wrap"><table>
+    <thead><tr><th>Learner</th><th>Email</th><th>Community</th><th>Vertical</th><th>Call Date</th><th>Duration</th><th>Roadmap PDF</th></tr></thead>
     <tbody>
-    ${unassigned.map((l,i)=>{
-      const acs = Object.values(acLoad||{}).filter(a=>a.vertical===l.vertical&&a.status==='ok').sort((a,b)=>a.assigned-b.assigned);
-      const suggested = acs[0]?.name || 'No AC available';
-      return `<tr>
-        <td style="font-size:11px;font-weight:600;">${l.name}</td>
-        <td style="font-size:10px;color:var(--muted);">${l.email||'—'}</td>
-        <td style="font-size:11px;">${l.stage||'—'}</td>
-        <td><span class="badge badge-info" style="font-size:10px;">${l.vertical||'—'}</span></td>
-        <td style="font-size:11px;">${l.date||'—'}</td>
-        <td style="font-size:11px;color:var(--ok);">${suggested}</td>
-      </tr>`;
-    }).join('')}
+    ${calls.map(c=>`<tr>
+      <td style="font-size:11px;font-weight:600;">${c.name}</td>
+      <td style="font-size:10px;color:var(--muted);">${c.email||'—'}</td>
+      <td style="font-size:10px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.community}">${c.community||'—'}</td>
+      <td><span class="badge badge-info" style="font-size:10px;">${c.vertical||'—'}</span></td>
+      <td style="font-size:11px;">${c.callDate||'—'}</td>
+      <td style="font-size:11px;color:${c.duration&&c.duration.includes('0m')?'var(--err)':'var(--ok)'};">${c.duration||'—'}</td>
+      <td>${c.roadmapPdfUrl?`<a href="${c.roadmapPdfUrl}" target="_blank" class="btn-secondary btn-sm" style="font-size:10px;">PDF ↗</a>`:'—'}</td>
+    </tr>`).join('')}
     </tbody>
-  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--ok);font-size:13px;">✓ All leads assigned.</div>`}
+  </table></div>${(roadmapCallsData||[]).length>100?`<div style="padding:8px;font-size:11px;color:var(--muted);text-align:center;">Showing first 100 of ${(roadmapCallsData||[]).length}</div>`:''}`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No roadmap call records.</div>`}
 </div>`;
   }
 
   else if (tab === 'cm-tasks') {
     const groups = (d&&d.groups)||[];
-    const webs   = (d&&d.webinarDNA)||[];
     const today  = new Date().toLocaleDateString('en-IN');
+    // Show actual posting log compliance if available
+    const recentPosting = (cmPosting||[]).slice(0,10);
     el.innerHTML = `
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+${recentPosting.length?`<div class="card" style="margin-top:12px;">
+  <div class="card-header"><div class="card-title">Recent CM Posting Compliance</div><span style="font-size:11px;color:var(--muted);">From CM_Monitoring_Tracker.xlsx</span></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Date</th><th>Community</th><th>CM</th><th>Compliance%</th><th>Quiz</th><th>EOD Poll</th></tr></thead>
+    <tbody>
+    ${recentPosting.map(p=>`<tr>
+      <td style="font-size:11px;">${p.date||'—'}</td>
+      <td style="font-size:11px;font-weight:600;">${p.community||'—'}</td>
+      <td style="font-size:11px;">${p.cmName||'—'}</td>
+      <td style="color:${p.complianceScore<60?'var(--err)':p.complianceScore<80?'var(--warn)':'var(--ok)'};">${p.complianceScore}%</td>
+      <td>${p.quizPosted?'✅':'❌'}</td>
+      <td>${p.eodPollPosted?'✅':'❌'}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>
+</div>`:''}
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
   <div class="card">
-    <div class="card-header"><div class="card-title">CM Daily Checklist</div><span style="font-size:11px;color:var(--muted);">${today}</span></div>
+    <div class="card-header"><div class="card-title">CM Daily SOP Checklist</div><span style="font-size:11px;color:var(--muted);">${today}</span></div>
     <div style="font-size:12px;">
     ${[
-      {task:'Post daily morning message in all active communities', sop:'SOP §3.1 — 9:00 AM IST'},
-      {task:'Tag AC on any hot lead who replied to webinar CTA', sop:'SOP §4.2 — within 30 min of reply'},
-      {task:'Confirm today\'s webinar room is set up + reminder sent', sop:'SOP §5.1 — 2h before webinar'},
-      {task:'Log webinar attendance in Community Master → DNA sheet', sop:'SOP §5.4 — post-webinar within 1h'},
-      {task:'Check W1 members engaged (replied/reacted in last 48h)', sop:'SOP §6.1 — daily scan'},
-      {task:'Flag any drop-off in attendance (>30% from last week)', sop:'SOP §6.3 — weekly but daily check'},
-      {task:'Confirm all new paid learners added to correct WA group', sop:'SOP §7.1 — same day as payment'},
-      {task:'Send EOD summary to AC (leads responded, conversions)', sop:'SOP §8.2 — 7:00 PM IST'},
-    ].map((t,i)=>`<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start;">
+      {task:'Post morning quiz (10:00 AM) in all active communities',sop:'SOP — Quiz 10am posting'},
+      {task:'Post answer key + crisis/opportunity content (11:00 AM)',sop:'SOP — Answer Key 11am, Crisis 11am'},
+      {task:'Post reading material (12:00 PM)',sop:'SOP — Reading Mat. 12pm'},
+      {task:'Tag AC on any hot lead who responded to webinar CTA',sop:'SOP — within 30 min of reply'},
+      {task:'Confirm webinar room setup + send WA reminder (2h before)',sop:'SOP — 2h pre-webinar'},
+      {task:'Log webinar attendance in Community Master → DNA sheet',sop:'SOP — within 1h post-webinar'},
+      {task:'Post EOD quiz + answer key + poll',sop:'SOP — EOD Quiz, EOD Answer Key, EOD Poll'},
+      {task:'Confirm all paid learners added to correct WA group',sop:'SOP — same day as payment'},
+      {task:'Send EOD summary to AC (leads responded, conversions)',sop:'SOP — 7:00 PM IST'},
+    ].map((t,i)=>`<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start;">
       <input type="checkbox" id="cm-task-${i}" style="margin-top:2px;accent-color:var(--red);" />
       <div><div style="color:#fff;">${t.task}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${t.sop}</div></div>
     </div>`).join('')}
@@ -2679,18 +2762,18 @@ function renderAssignTab(tab) {
   </div>
 
   <div class="card">
-    <div class="card-header"><div class="card-title">AC Daily Checklist</div><span style="font-size:11px;color:var(--muted);">${today}</span></div>
+    <div class="card-header"><div class="card-title">AC Daily SOP Checklist</div><span style="font-size:11px;color:var(--muted);">${today}</span></div>
     <div style="font-size:12px;">
     ${[
-      {task:'Call all leads from last 48h who haven\'t been contacted', sop:'SOP §2.1 — 48h response SLA'},
-      {task:'Conduct discovery/roadmap call for enrolled learners W0-W2', sop:'SOP §3.4 — within 3 days of enrolment'},
-      {task:'Update lead stage in tracker (Interested/Demo/Drop)', sop:'SOP §2.3 — after every call'},
-      {task:'Send personalised roadmap PDF to new enrollments', sop:'SOP §4.1 — within 24h of payment'},
-      {task:'Attend webinar and follow up with attendees same day', sop:'SOP §5.5 — post-webinar same day'},
-      {task:'Check LOP balance — if 0 deficit, increase dial count', sop:'SOP §6.2 — daily compliance'},
-      {task:'Escalate any lead on fence for >5 days to senior AC', sop:'SOP §3.6 — 5-day escalation'},
-      {task:'Log completed discovery calls in HERA', sop:'SOP §3.5 — real-time logging'},
-    ].map((t,i)=>`<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start;">
+      {task:'Call all leads within 48h of enquiry (no lead untouched)',sop:'SOP — 48h response SLA'},
+      {task:'Log every call in tracker: stage → Interested/Demo/Drop',sop:'SOP — update after every call'},
+      {task:'Conduct discovery call: understand goal, timeline, blockers',sop:'SOP — discovery call framework'},
+      {task:'Conduct roadmap call for W0-W2 enrolled learners',sop:'SOP — within 3 days of enrolment'},
+      {task:'Send personalised roadmap PDF within 24h of payment',sop:'SOP — roadmap PDF within 24h'},
+      {task:'Attend webinar + follow up all attendees same evening',sop:'SOP — post-webinar same day'},
+      {task:'Escalate any lead stalled >5 days to senior AC',sop:'SOP — 5-day escalation rule'},
+      {task:'Check daily dial target vs LOP balance — adjust if needed',sop:'SOP — Phase compliance'},
+    ].map((t,i)=>`<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start;">
       <input type="checkbox" id="ac-task-${i}" style="margin-top:2px;accent-color:var(--red);" />
       <div><div style="color:#fff;">${t.task}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${t.sop}</div></div>
     </div>`).join('')}
@@ -2698,13 +2781,13 @@ function renderAssignTab(tab) {
   </div>
 </div>
 
-<div class="card" style="margin-top:16px;">
-  <div class="card-header"><div class="card-title">Active Communities — Quick Status</div></div>
-  ${groups.length?`<div class="table-wrap"><table>
+<div class="card" style="margin-top:12px;">
+  <div class="card-header"><div class="card-title">Active Communities</div></div>
+  ${groups.filter(g=>g.communityName).length?`<div class="table-wrap"><table>
     <thead><tr><th>Community</th><th>Vertical</th><th>CM</th><th>Members</th><th>Start</th><th>WA Group</th><th>Offer Page</th></tr></thead>
     <tbody>
-    ${groups.filter(g=>g.communityName).slice(0,20).map(g=>`<tr>
-      <td style="font-size:11px;font-weight:600;">${g.communityName}</td>
+    ${groups.filter(g=>g.communityName).slice(0,25).map(g=>`<tr>
+      <td style="font-size:11px;font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${g.communityName}</td>
       <td><span class="badge badge-info" style="font-size:10px;">${g.vertical||'—'}</span></td>
       <td style="font-size:11px;">${g.cm||'—'}</td>
       <td style="font-size:11px;">${g.members||'—'}</td>
@@ -2713,7 +2796,7 @@ function renderAssignTab(tab) {
       <td>${g.offerPage?`<a href="${g.offerPage}" target="_blank" class="btn-secondary btn-sm" style="font-size:10px;">Page ↗</a>`:'—'}</td>
     </tr>`).join('')}
     </tbody>
-  </table></div>`:`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No community data loaded.</div>`}
+  </table></div>`:`<div style="font-size:11px;color:var(--muted);padding:12px;">No community data. Upload Community_Master.xlsx.</div>`}
 </div>`;
   }
 }
