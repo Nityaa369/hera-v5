@@ -983,16 +983,458 @@ app.post('/api/webhook/sharefree', (req, res) => {
   res.json({ received: true });
 });
 
+// ── INTEGRATIONS STORE ───────────────────────────────────────
+// Holds credentials + fetched data in memory (never written to disk)
+let INTEGRATIONS = {
+  meta:      { token: null, accountId: null, data: null, syncedAt: null, error: null },
+  cashfree:  { appId: null, secretKey: null, env: 'prod', data: null, syncedAt: null, error: null },
+  aisensy:   { apiKey: null, data: null, syncedAt: null, error: null },
+  growthx:   { apiKey: null, data: null, syncedAt: null, error: null },
+  mail:      { provider: null, apiKey: null, listId: null, data: null, syncedAt: null, error: null }
+};
+
+// ── HTTP HELPER ──────────────────────────────────────────────
+function httpGet(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const opts = {
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: 'GET',
+      headers: { 'Accept': 'application/json', ...headers }
+    };
+    const req = https.request(opts, res => {
+      let body = '';
+      res.on('data', d => body += d);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(body) }); }
+        catch(e) { resolve({ status: res.statusCode, data: body }); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function httpPost(url, payload, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const u = new URL(url);
+    const opts = {
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Content-Length': Buffer.byteLength(body), ...headers }
+    };
+    const req = https.request(opts, res => {
+      let b = '';
+      res.on('data', d => b += d);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(b) }); }
+        catch(e) { resolve({ status: res.statusCode, data: b }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── META ADS ─────────────────────────────────────────────────
+async function syncMeta() {
+  const { token, accountId } = INTEGRATIONS.meta;
+  if (!token || !accountId) throw new Error('Meta token or accountId not configured');
+  INTEGRATIONS.meta.error = null;
+
+  const base = `https://graph.facebook.com/v19.0/act_${accountId}`;
+  const fields = 'campaign_name,adset_name,ad_name,impressions,clicks,spend,cpm,cpc,ctr,actions,cost_per_action_type,reach,frequency';
+  const period = 'last_90d';
+
+  // Fetch ad-level insights
+  const insightsUrl = `${base}/insights?fields=${fields}&date_preset=${period}&level=ad&limit=500&access_token=${token}`;
+  const r = await httpGet(insightsUrl);
+  if (r.status !== 200) throw new Error(`Meta API error ${r.status}: ${JSON.stringify(r.data).slice(0,200)}`);
+
+  const rows = r.data.data || [];
+
+  // Fetch campaigns for status
+  const campUrl = `${base}/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget&limit=200&access_token=${token}`;
+  const cr = await httpGet(campUrl);
+  const campaigns = (cr.data.data || []).reduce((m, c) => { m[c.name] = c; return m; }, {});
+
+  // Fetch adsets for funnel link
+  const adsetUrl = `${base}/adsets?fields=id,name,campaign_id,targeting,status&limit=500&access_token=${token}`;
+  const ar = await httpGet(adsetUrl);
+  const adsets = (ar.data.data || []).reduce((m, a) => { m[a.name] = a; return m; }, {});
+
+  // Enrich rows
+  const enriched = rows.map(row => {
+    const leads = (row.actions || []).find(a => a.action_type === 'lead')?.value || 0;
+    const purchases = (row.actions || []).find(a => a.action_type === 'offsite_conversion.fb_pixel_purchase' || a.action_type === 'purchase')?.value || 0;
+    const vertical = detectVertical(row.campaign_name || row.adset_name || row.ad_name || '');
+    const cpl = leads > 0 ? (safeNum(row.spend) / leads) : null;
+    return {
+      campaignName: row.campaign_name || '',
+      adsetName: row.adset_name || '',
+      adName: row.ad_name || '',
+      vertical,
+      impressions: safeNum(row.impressions),
+      clicks: safeNum(row.clicks),
+      spend: safeNum(row.spend),
+      cpm: safeNum(row.cpm),
+      cpc: safeNum(row.cpc),
+      ctr: safeNum(row.ctr),
+      reach: safeNum(row.reach),
+      frequency: safeNum(row.frequency),
+      leads: safeNum(leads),
+      purchases: safeNum(purchases),
+      cpl,
+      cpa: purchases > 0 ? safeNum(row.spend) / purchases : null,
+      cvrClickToLead: safeNum(row.clicks) > 0 ? (safeNum(leads) / safeNum(row.clicks)) * 100 : 0,
+      campaignStatus: campaigns[row.campaign_name]?.status || 'UNKNOWN'
+    };
+  });
+
+  INTEGRATIONS.meta.data = enriched;
+  INTEGRATIONS.meta.syncedAt = new Date().toISOString();
+  return enriched;
+}
+
+// ── CASHFREE ─────────────────────────────────────────────────
+async function syncCashfree() {
+  const { appId, secretKey, env } = INTEGRATIONS.cashfree;
+  if (!appId || !secretKey) throw new Error('Cashfree credentials not configured');
+  INTEGRATIONS.cashfree.error = null;
+
+  const host = env === 'sandbox' ? 'sandbox.cashfree.com' : 'api.cashfree.com';
+  const headers = { 'x-client-id': appId, 'x-client-secret': secretKey, 'x-api-version': '2023-08-01' };
+
+  // Fetch last 90 days of orders
+  const from = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+  const to   = new Date().toISOString().slice(0, 10);
+  const r = await httpGet(`https://${host}/pg/orders?from=${from}&to=${to}&count=200`, headers);
+  if (r.status !== 200) throw new Error(`Cashfree API error ${r.status}: ${JSON.stringify(r.data).slice(0,200)}`);
+
+  const orders = (r.data.data || r.data || []).map(o => ({
+    orderId:    o.order_id || o.cf_order_id || '',
+    customerName:  o.customer_details?.customer_name || o.customer_name || '',
+    customerEmail: o.customer_details?.customer_email || o.customer_email || '',
+    customerPhone: o.customer_details?.customer_phone || o.customer_phone || '',
+    amount:     safeNum(o.order_amount),
+    currency:   o.order_currency || 'INR',
+    status:     o.order_status || '',
+    createdAt:  o.created_at || o.order_tags?.created_at || '',
+    tags:       o.order_tags || {},
+    vertical:   detectVertical(o.order_note || o.order_tags?.product || '')
+  })).filter(o => o.status === 'PAID' || o.status === 'SUCCESS');
+
+  INTEGRATIONS.cashfree.data = orders;
+  INTEGRATIONS.cashfree.syncedAt = new Date().toISOString();
+  return orders;
+}
+
+// ── AISENSY ──────────────────────────────────────────────────
+async function syncAisensy() {
+  const { apiKey } = INTEGRATIONS.aisensy;
+  if (!apiKey) throw new Error('AiSensy API key not configured');
+  INTEGRATIONS.aisensy.error = null;
+
+  const headers = { 'x-api-key': apiKey };
+
+  // Fetch all campaigns/broadcasts
+  const cr = await httpGet('https://backend.aisensy.com/direct-apis/t1/campaigns?limit=50', headers);
+
+  // Fetch all contacts count
+  const contacts = cr.status === 200 ? (cr.data.data || cr.data || []) : [];
+
+  // Cross-reference: for each paid lead, check if they're in a WA group
+  const paid = DATA.revenue.filter(r => r.email || r.phone);
+  const checks = [];
+
+  for (const lead of paid.slice(0, 100)) { // limit to avoid rate limits
+    const query = lead.phone || lead.email;
+    if (!query) continue;
+    try {
+      const res = await httpGet(`https://backend.aisensy.com/direct-apis/t1/contacts/search?query=${encodeURIComponent(query)}`, headers);
+      const contact = res.data?.data?.[0] || res.data?.[0];
+      checks.push({
+        name: lead.name,
+        email: lead.email,
+        phone: lead.phone,
+        community: lead.finalCommunity || lead.community,
+        vertical: lead.vertical,
+        paidDate: lead.date,
+        amount: lead.price,
+        found: !!contact,
+        waTags: contact?.tags || [],
+        waGroups: contact?.labels || [],
+        inCorrectGroup: contact ? checkGroupMatch(lead, contact) : false
+      });
+    } catch(e) {
+      checks.push({ name: lead.name, email: lead.email, found: false, inCorrectGroup: false, error: e.message });
+    }
+  }
+
+  INTEGRATIONS.aisensy.data = { campaigns: contacts, checks };
+  INTEGRATIONS.aisensy.syncedAt = new Date().toISOString();
+  return INTEGRATIONS.aisensy.data;
+}
+
+function checkGroupMatch(lead, contact) {
+  const community = (lead.finalCommunity || lead.community || '').toLowerCase();
+  const tags = (contact.tags || []).concat(contact.labels || []).map(t => (t.name || t || '').toLowerCase());
+  return tags.some(t => community && (t.includes(community.slice(0,10)) || community.includes(t.slice(0,10))));
+}
+
+// ── GROWTHX / MAIL ───────────────────────────────────────────
+async function syncGrowthx() {
+  const { apiKey } = INTEGRATIONS.growthx;
+  if (!apiKey) throw new Error('GrowthX API key not configured');
+  INTEGRATIONS.growthx.error = null;
+
+  const r = await httpGet('https://api.growthx.club/v1/campaigns', { 'Authorization': `Bearer ${apiKey}` });
+  if (r.status !== 200) throw new Error(`GrowthX API error ${r.status}`);
+
+  INTEGRATIONS.growthx.data = r.data;
+  INTEGRATIONS.growthx.syncedAt = new Date().toISOString();
+  return r.data;
+}
+
+async function syncMail() {
+  const { provider, apiKey, listId } = INTEGRATIONS.mail;
+  if (!apiKey) throw new Error('Mail API key not configured');
+  INTEGRATIONS.mail.error = null;
+
+  let campaigns = [];
+
+  if (provider === 'mailchimp') {
+    // Mailchimp needs dc from key (key ends in -usXX)
+    const dc = (apiKey.split('-').pop()) || 'us1';
+    const r = await httpGet(`https://${dc}.api.mailchimp.com/3.0/campaigns?count=50&status=sent`, {
+      'Authorization': `Basic ${Buffer.from('anystring:' + apiKey).toString('base64')}`
+    });
+    campaigns = (r.data.campaigns || []).map(c => ({
+      id: c.id, subject: c.settings?.subject_line || '', sentAt: c.send_time,
+      recipients: c.recipients?.recipient_count || 0,
+      opens: c.report_summary?.unique_opens || 0,
+      clicks: c.report_summary?.unique_subscriber_clicks || 0,
+      openRate: c.report_summary?.open_rate || 0,
+      clickRate: c.report_summary?.click_rate || 0
+    }));
+  } else if (provider === 'sendgrid') {
+    const r = await httpGet('https://api.sendgrid.com/v3/campaigns?limit=50', { 'Authorization': `Bearer ${apiKey}` });
+    campaigns = (r.data.result || r.data || []).map(c => ({
+      id: c.id, subject: c.subject || c.title || '', sentAt: c.send_at,
+      recipients: c.recipients || 0
+    }));
+  } else if (provider === 'mailercloud') {
+    const r = await httpGet(`https://api.mailercloud.com/v1/campaigns?api_key=${apiKey}&limit=50`);
+    campaigns = (r.data.data || []).map(c => ({
+      id: c.id, subject: c.subject || '', sentAt: c.sent_at,
+      recipients: c.recipients_count || 0,
+      opens: c.unique_opens || 0,
+      clicks: c.unique_clicks || 0,
+      openRate: c.open_rate || 0,
+      clickRate: c.click_rate || 0,
+      bounces: c.bounces || 0,
+      unsubscribes: c.unsubscribes || 0
+    }));
+  }
+
+  INTEGRATIONS.mail.data = campaigns;
+  INTEGRATIONS.mail.syncedAt = new Date().toISOString();
+  return campaigns;
+}
+
+// ── INTEGRATION ROUTES ───────────────────────────────────────
+
+// Get status of all integrations
 app.get('/api/integrations/status', (req, res) => {
   res.json({
-    razorpay: !!process.env.RAZORPAY_KEY_ID,
-    payu: !!process.env.PAYU_KEY,
-    shopse: !!process.env.SHOPSE_KEY,
-    fibe: !!process.env.FIBE_KEY,
-    aisensy: !!process.env.AISENSY_API_KEY,
-    growthx: !!process.env.GROWTHX_API_KEY,
-    sharefreeWebhook: process.env.BASE_URL ? `${process.env.BASE_URL}/api/webhook/sharefree` : '/api/webhook/sharefree'
+    meta:     { connected: !!(INTEGRATIONS.meta.token && INTEGRATIONS.meta.accountId), syncedAt: INTEGRATIONS.meta.syncedAt, error: INTEGRATIONS.meta.error, rows: INTEGRATIONS.meta.data?.length || 0 },
+    cashfree: { connected: !!(INTEGRATIONS.cashfree.appId && INTEGRATIONS.cashfree.secretKey), syncedAt: INTEGRATIONS.cashfree.syncedAt, error: INTEGRATIONS.cashfree.error, rows: INTEGRATIONS.cashfree.data?.length || 0 },
+    aisensy:  { connected: !!INTEGRATIONS.aisensy.apiKey, syncedAt: INTEGRATIONS.aisensy.syncedAt, error: INTEGRATIONS.aisensy.error, rows: INTEGRATIONS.aisensy.data?.checks?.length || 0 },
+    growthx:  { connected: !!INTEGRATIONS.growthx.apiKey, syncedAt: INTEGRATIONS.growthx.syncedAt, error: INTEGRATIONS.growthx.error },
+    mail:     { connected: !!INTEGRATIONS.mail.apiKey, syncedAt: INTEGRATIONS.mail.syncedAt, error: INTEGRATIONS.mail.error, rows: INTEGRATIONS.mail.data?.length || 0 },
+    webhookUrl: process.env.BASE_URL ? `${process.env.BASE_URL}/api/webhook/payment` : null
   });
+});
+
+// Save credentials
+app.post('/api/integrations/configure', (req, res) => {
+  const { service, ...creds } = req.body;
+  if (!INTEGRATIONS[service]) return res.status(400).json({ error: 'Unknown service' });
+  Object.assign(INTEGRATIONS[service], creds);
+  // Clear stale data when reconfigured
+  INTEGRATIONS[service].data = null;
+  INTEGRATIONS[service].syncedAt = null;
+  INTEGRATIONS[service].error = null;
+  res.json({ ok: true, service });
+});
+
+// Trigger sync for a service
+app.post('/api/integrations/sync/:service', async (req, res) => {
+  const { service } = req.params;
+  try {
+    let result;
+    if (service === 'meta')      result = await syncMeta();
+    else if (service === 'cashfree') result = await syncCashfree();
+    else if (service === 'aisensy')  result = await syncAisensy();
+    else if (service === 'growthx')  result = await syncGrowthx();
+    else if (service === 'mail')     result = await syncMail();
+    else return res.status(400).json({ error: 'Unknown service' });
+    res.json({ ok: true, rows: Array.isArray(result) ? result.length : 1 });
+  } catch(e) {
+    INTEGRATIONS[service] && (INTEGRATIONS[service].error = e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get integration data for frontend
+app.get('/api/integrations/data', (req, res) => {
+  res.json({
+    meta:     INTEGRATIONS.meta.data,
+    cashfree: INTEGRATIONS.cashfree.data,
+    aisensy:  INTEGRATIONS.aisensy.data,
+    growthx:  INTEGRATIONS.growthx.data,
+    mail:     INTEGRATIONS.mail.data
+  });
+});
+
+// Funnel analytics: cross-join Meta ads → Leads → Revenue → AiSensy
+app.get('/api/funnel', (req, res) => {
+  const vertical = req.query.vertical || null;
+
+  // Filter by vertical if specified
+  const filterV = arr => vertical ? arr.filter(r => !vertical || r.vertical === vertical) : arr;
+
+  const metaAds   = filterV(INTEGRATIONS.meta.data || []);
+  const leads     = filterV(DATA.leads);
+  const revenue   = filterV(DATA.revenue);
+  const webinars  = filterV(DATA.webinarDNA);
+  const aiChecks  = (INTEGRATIONS.aisensy.data?.checks || []).filter(c => !vertical || c.vertical === vertical);
+
+  // Aggregate by vertical
+  const verticals = ['CD','CL','ID','AI','AIW','Other'];
+  const byVertical = verticals.map(v => {
+    const ads  = metaAds.filter(a => a.vertical === v);
+    const ls   = DATA.leads.filter(l => l.vertical === v);
+    const rev  = DATA.revenue.filter(r => r.vertical === v);
+    const webs = DATA.webinarDNA.filter(w => w.vertical === v);
+    const chks = (INTEGRATIONS.aisensy.data?.checks || []).filter(c => c.vertical === v);
+
+    const spend       = ads.reduce((s, a) => s + a.spend, 0);
+    const impressions = ads.reduce((s, a) => s + a.impressions, 0);
+    const adLeads     = ads.reduce((s, a) => s + a.leads, 0);
+    const totalLeads  = ls.length;
+    const webAttend   = webs.reduce((s, w) => s + (w.attendees || 0), 0);
+    const webConv     = webs.reduce((s, w) => s + (w.conversions || 0), 0);
+    const enrolled    = rev.length;
+    const revenue_sum = rev.reduce((s, r) => s + r.price, 0);
+    const inGroup     = chks.filter(c => c.inCorrectGroup).length;
+    const missingGroup= chks.filter(c => c.found && !c.inCorrectGroup).length;
+
+    return {
+      vertical: v,
+      funnel: [
+        { stage: 'Ad Impressions', count: impressions, spend },
+        { stage: 'Clicks',         count: ads.reduce((s,a)=>s+a.clicks,0) },
+        { stage: 'Ad Leads',       count: adLeads },
+        { stage: 'Total Leads',    count: totalLeads },
+        { stage: 'Webinar Attended', count: webAttend },
+        { stage: 'Webinar Converted', count: webConv },
+        { stage: 'Enrolled (Paid)', count: enrolled, revenue: revenue_sum },
+        { stage: 'In WA Group',    count: inGroup }
+      ],
+      dropoffs: computeDropoffs(adLeads, totalLeads, webAttend, webConv, enrolled, inGroup),
+      ads: ads.slice(0, 20),
+      cpl: adLeads > 0 ? spend / adLeads : null,
+      roas: spend > 0 ? revenue_sum / spend : null
+    };
+  });
+
+  // Per-campaign funnel breakdown
+  const campaignFunnels = aggregateByCampaign(metaAds, DATA.leads, DATA.revenue);
+
+  res.json({ byVertical, campaignFunnels, syncedAt: new Date().toISOString() });
+});
+
+function computeDropoffs(adLeads, totalLeads, webAttend, webConv, enrolled, inGroup) {
+  const stages = [adLeads, webAttend, webConv, enrolled, inGroup].filter(n => n > 0);
+  const drops = [];
+  const labels = ['Leads → Webinar', 'Webinar → Conversion', 'Conversion → Enrolled', 'Enrolled → WA Group'];
+  const vals   = [adLeads || totalLeads, webAttend, webConv, enrolled, inGroup];
+  for (let i = 0; i < vals.length - 1; i++) {
+    if (!vals[i]) continue;
+    const rate = vals[i+1] ? ((vals[i+1] / vals[i]) * 100) : 0;
+    const drop = 100 - rate;
+    drops.push({ label: labels[i], from: vals[i], to: vals[i+1] || 0, convRate: rate.toFixed(1), dropRate: drop.toFixed(1), status: drop > 80 ? 'red' : drop > 60 ? 'amber' : 'green' });
+  }
+  return drops;
+}
+
+function aggregateByCampaign(metaAds, leads, revenue) {
+  const map = {};
+  metaAds.forEach(a => {
+    const key = a.campaignName;
+    if (!map[key]) map[key] = { campaignName: key, vertical: a.vertical, spend: 0, impressions: 0, clicks: 0, leads: 0, status: a.campaignStatus };
+    map[key].spend       += a.spend;
+    map[key].impressions += a.impressions;
+    map[key].clicks      += a.clicks;
+    map[key].leads       += a.leads;
+  });
+  // Match revenue to campaigns by date proximity + vertical
+  Object.values(map).forEach(c => {
+    const rev = revenue.filter(r => r.vertical === c.vertical);
+    c.enrolled = rev.length;
+    c.revenue  = rev.reduce((s, r) => s + r.price, 0);
+    c.cpl      = c.leads > 0 ? c.spend / c.leads : null;
+    c.roas     = c.spend > 0 ? c.revenue / c.spend : null;
+  });
+  return Object.values(map).sort((a, b) => b.spend - a.spend);
+}
+
+// Cashfree webhook (incoming payments)
+app.post('/api/webhook/payment', express.raw({ type: 'application/json' }), (req, res) => {
+  try {
+    const event = JSON.parse(req.body);
+    const { type, data } = event;
+    if (type === 'PAYMENT_SUCCESS_WEBHOOK' || type === 'PAYMENT_SUCCESS') {
+      const o = data?.order || data || {};
+      const c = data?.customer_details || o.customer_details || {};
+      DATA.revenue.push({
+        name:      c.customer_name  || '',
+        email:     c.customer_email || '',
+        phone:     c.customer_phone || '',
+        date:      o.created_at     || new Date().toISOString(),
+        community: o.order_note     || o.order_id || '',
+        price:     safeNum(o.order_amount),
+        callerName:'Cashfree',
+        mode:      'Cashfree',
+        vertical:  detectVertical(o.order_note || o.order_tags?.product || '')
+      });
+      if (INTEGRATIONS.cashfree.data) {
+        INTEGRATIONS.cashfree.data.push({ orderId: o.order_id, amount: safeNum(o.order_amount), status: 'PAID', createdAt: o.created_at });
+      }
+    }
+    res.json({ received: true });
+  } catch(e) { res.json({ received: true }); }
+});
+
+app.post('/api/webhook/sharefree', (req, res) => {
+  const { name, email, amount, product, timestamp } = req.body;
+  if (name && amount) {
+    DATA.revenue.push({
+      name, email,
+      date: timestamp || new Date().toISOString(),
+      community: product || '',
+      price: safeNum(amount),
+      callerName: 'Sharefree',
+      mode: 'Sharefree',
+      vertical: detectVertical(product || '')
+    });
+  }
+  res.json({ received: true });
 });
 
 app.get('*', (req, res) => {
