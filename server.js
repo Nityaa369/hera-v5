@@ -700,18 +700,22 @@ app.get('/api/data', (req, res) => {
     .flatMap(h => h.issues.map(i => ({ cohort: h.cohort, vertical: h.vertical, issue: i, status: h.status })))
     .slice(0, 8);
 
+  // Only expose Team Abhipsa verticals (CD/CL/ID/AI/AIW)
+  const abhipsaVerticals = {};
+  ['CD','CL','ID','AI','AIW'].forEach(v => { abhipsaVerticals[v] = DATA.verticals[v]; });
+
   res.json({
     syncedAt: DATA.syncedAt,
     syncing: DATA.syncing,
     paused: DATA.paused,
     lastError: DATA.lastError,
-    verticals: DATA.verticals,
-    team: DATA.team,
-    leads: DATA.leads,
-    revenue: DATA.revenue,
-    marketing: DATA.marketing,
-    webinarDNA: DATA.webinarDNA,
-    groups: DATA.groups,
+    verticals: abhipsaVerticals,
+    team: abhipsaOnly(DATA.team),
+    leads: abhipsaOnly(DATA.leads),
+    revenue: abhipsaOnly(DATA.revenue),
+    marketing: abhipsaOnly(DATA.marketing),
+    webinarDNA: abhipsaOnly(DATA.webinarDNA),
+    groups: abhipsaOnly(DATA.groups),
     monthlySheets: DATA.monthlySheets,
     formResponses: DATA.formResponses,
     topIssues,
@@ -1186,18 +1190,61 @@ function checkGroupMatch(lead, contact) {
   return tags.some(t => community && (t.includes(community.slice(0,10)) || community.includes(t.slice(0,10))));
 }
 
-// ── GROWTHX / MAIL ───────────────────────────────────────────
-async function syncGrowthx() {
-  const { apiKey } = INTEGRATIONS.growthx;
-  if (!apiKey) throw new Error('GrowthX API key not configured');
-  INTEGRATIONS.growthx.error = null;
+// ── GROWTHX ───────────────────────────────────────────────────
+const GROWTHX_BASE = 'https://growthx.skillarbitra.ge';
 
-  const r = await httpGet('https://api.growthx.club/v1/campaigns', { 'Authorization': `Bearer ${apiKey}` });
-  if (r.status !== 200) throw new Error(`GrowthX API error ${r.status}`);
+function growthxToken() {
+  const t = INTEGRATIONS.growthx.apiKey || process.env.GROWTHX_TOKEN;
+  if (!t) throw new Error('GrowthX token not configured. Add GROWTHX_TOKEN in Railway env vars or save via Funnel page.');
+  return t;
+}
 
-  INTEGRATIONS.growthx.data = r.data;
-  INTEGRATIONS.growthx.syncedAt = new Date().toISOString();
+function validateDateRange(from, to) {
+  if (!from || !to) throw new Error('from and to dates are required (YYYY-MM-DD)');
+  const d1 = new Date(from), d2 = new Date(to);
+  if (isNaN(d1) || isNaN(d2)) throw new Error('Invalid date format. Use YYYY-MM-DD.');
+  const days = (d2 - d1) / 86400000;
+  if (days < 0) throw new Error('"from" must be before "to"');
+  if (days > 31) throw new Error('Date range cannot exceed 31 days');
+  return { d1, d2, days };
+}
+
+async function fetchGrowthxLeads(from, to, opts = {}) {
+  validateDateRange(from, to);
+  let url = `${GROWTHX_BASE}/api/public/leads?from=${from}&to=${to}`;
+  if (opts.group)    url += `&group=${encodeURIComponent(opts.group)}`;
+  if (opts.leadtype) url += `&leadtype=${encodeURIComponent(opts.leadtype)}`;
+  if (opts.slug)     url += `&slug=${encodeURIComponent(opts.slug)}`;
+  const r = await httpGet(url, { 'Authorization': `Bearer ${growthxToken()}` });
+  if (r.status !== 200) throw new Error(`GrowthX Leads API ${r.status}: ${JSON.stringify(r.data).slice(0,300)}`);
   return r.data;
+}
+
+async function fetchGrowthxFunnel(from, to) {
+  validateDateRange(from, to);
+  const url = `${GROWTHX_BASE}/api/public/funnels?from=${from}&to=${to}&category=community`;
+  const r = await httpGet(url, { 'Authorization': `Bearer ${growthxToken()}` });
+  if (r.status !== 200) throw new Error(`GrowthX Funnel API ${r.status}: ${JSON.stringify(r.data).slice(0,300)}`);
+  return r.data;
+}
+
+async function syncGrowthx() {
+  INTEGRATIONS.growthx.error = null;
+  // Default: last 30 days
+  const to   = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const [leadsData, funnelData] = await Promise.allSettled([
+    fetchGrowthxLeads(from, to),
+    fetchGrowthxFunnel(from, to)
+  ]);
+  INTEGRATIONS.growthx.data = {
+    leads:  leadsData.status  === 'fulfilled' ? leadsData.value  : { error: leadsData.reason?.message },
+    funnel: funnelData.status === 'fulfilled' ? funnelData.value : { error: funnelData.reason?.message },
+    from, to
+  };
+  INTEGRATIONS.growthx.syncedAt = new Date().toISOString();
+  INTEGRATIONS.growthx.apiKey = growthxToken(); // persist resolved token
+  return INTEGRATIONS.growthx.data;
 }
 
 async function syncMail() {
@@ -1246,15 +1293,68 @@ async function syncMail() {
   return campaigns;
 }
 
+// ── STARTUP: load static-data.js into server DATA ─────────────
+function loadStaticDataOnStartup() {
+  const p = path.join(__dirname, 'public', 'static-data.js');
+  if (!fs.existsSync(p)) return;
+  try {
+    const content = fs.readFileSync(p, 'utf8');
+    const m = content.match(/window\.STATIC_DATA\s*=\s*(\{[\s\S]*?\});\s*$/);
+    if (!m) return;
+    const sd = JSON.parse(m[1]);
+    DATA.leads      = sd.leads      || [];
+    DATA.revenue    = sd.revenue    || [];
+    DATA.marketing  = sd.marketing  || [];
+    DATA.webinarDNA = sd.webinarDNA || [];
+    DATA.groups     = sd.groups     || [];
+    DATA.team       = sd.team       || [];
+    DATA.lop        = sd.lop        || [];
+    DATA.talktime   = sd.talktime   || [];
+    DATA.monthlySheets = sd.monthlySheets || {};
+    if (sd.cohorts) {
+      ['CD','CL','ID','AI','AIW'].forEach(v => {
+        DATA.verticals[v].cohorts = sd.cohorts.filter(c => c.vertical === v);
+      });
+    }
+    DATA.syncedAt = sd.seededAt;
+    console.log(`Static data loaded: ${DATA.leads.length} leads, ${DATA.revenue.length} revenue, ${DATA.webinarDNA.length} webinars`);
+  } catch(e) { console.warn('loadStaticDataOnStartup failed:', e.message); }
+}
+
+// ── TEAM ABHIPSA FILTER ───────────────────────────────────────
+const ABHIPSA_VERTICALS = new Set(['CD','CL','ID','AI','AIW']);
+function abhipsaOnly(arr) {
+  return (arr || []).filter(r => !r.vertical || ABHIPSA_VERTICALS.has(r.vertical));
+}
+
 // ── INTEGRATION ROUTES ───────────────────────────────────────
+
+// GrowthX: query leads with mandatory date range (max 31 days)
+app.post('/api/growthx/leads', async (req, res) => {
+  const { from, to, group, leadtype, slug } = req.body;
+  try {
+    const data = await fetchGrowthxLeads(from, to, { group, leadtype, slug });
+    res.json({ ok: true, data });
+  } catch(e) { res.status(400).json({ error: e.message }); }
+});
+
+// GrowthX: fetch funnel data
+app.post('/api/growthx/funnel', async (req, res) => {
+  const { from, to } = req.body;
+  try {
+    const data = await fetchGrowthxFunnel(from, to);
+    res.json({ ok: true, data });
+  } catch(e) { res.status(400).json({ error: e.message }); }
+});
 
 // Get status of all integrations
 app.get('/api/integrations/status', (req, res) => {
+  const gxConnected = !!(INTEGRATIONS.growthx.apiKey || process.env.GROWTHX_TOKEN);
   res.json({
     meta:     { connected: !!(INTEGRATIONS.meta.token && INTEGRATIONS.meta.accountId), syncedAt: INTEGRATIONS.meta.syncedAt, error: INTEGRATIONS.meta.error, rows: INTEGRATIONS.meta.data?.length || 0 },
     cashfree: { connected: !!(INTEGRATIONS.cashfree.appId && INTEGRATIONS.cashfree.secretKey), syncedAt: INTEGRATIONS.cashfree.syncedAt, error: INTEGRATIONS.cashfree.error, rows: INTEGRATIONS.cashfree.data?.length || 0 },
     aisensy:  { connected: !!INTEGRATIONS.aisensy.apiKey, syncedAt: INTEGRATIONS.aisensy.syncedAt, error: INTEGRATIONS.aisensy.error, rows: INTEGRATIONS.aisensy.data?.checks?.length || 0 },
-    growthx:  { connected: !!INTEGRATIONS.growthx.apiKey, syncedAt: INTEGRATIONS.growthx.syncedAt, error: INTEGRATIONS.growthx.error },
+    growthx:  { connected: gxConnected, syncedAt: INTEGRATIONS.growthx.syncedAt, error: INTEGRATIONS.growthx.error },
     mail:     { connected: !!INTEGRATIONS.mail.apiKey, syncedAt: INTEGRATIONS.mail.syncedAt, error: INTEGRATIONS.mail.error, rows: INTEGRATIONS.mail.data?.length || 0 },
     webhookUrl: process.env.BASE_URL ? `${process.env.BASE_URL}/api/webhook/payment` : null
   });
@@ -1441,7 +1541,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Pre-populate INTEGRATIONS.growthx from env var so it works without UI config
+if (process.env.GROWTHX_TOKEN) {
+  INTEGRATIONS.growthx.apiKey = process.env.GROWTHX_TOKEN;
+}
+
 app.listen(PORT, () => {
   console.log('HERA v5 running on port ' + PORT);
   console.log('Dev mode:', IS_DEV ? 'ON (1-minute cron)' : 'OFF (3-hour cron)');
+  loadStaticDataOnStartup();
 });

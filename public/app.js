@@ -1826,159 +1826,306 @@ window.ingestTriggerSync = function() {
     .then(() => setTimeout(() => { loadIngestFiles(); loadIngestSyncStatus(); loadDataThen(() => {}); }, 3000));
 };
 
-// ── FUNNEL ANALYTICS PAGE ─────────────────────────────────────────────────────
-let funnelIntStatus = null;
 
+// ── FUNNEL ANALYTICS PAGE ────────────────────────────────────
 function funnel() {
-  $("main-content").innerHTML = `<div style="text-align:center;padding:60px;color:var(--muted);"><div class="spinner"></div><div style="margin-top:12px;font-size:12px;">Loading integrations...</div></div>`;
-
-  Promise.all([
-    fetch('/api/integrations/status').then(r => r.json()),
-    fetch('/api/funnel').then(r => r.json()).catch(() => null)
-  ]).then(([status, funnelData]) => {
-    funnelIntStatus = status;
-    renderFunnelPage(status, funnelData);
-  }).catch(e => {
-    $("main-content").innerHTML = `<div class="alert alert-err"><span class="alert-icon">⚠</span><div class="alert-body">${e.message}</div></div>`;
-  });
+  $("main-content").innerHTML = `<div style="text-align:center;padding:60px;color:var(--muted);"><div class="spinner"></div></div>`;
+  fetch('/api/integrations/status').then(r => r.json()).then(renderFunnelPage)
+    .catch(e => { $("main-content").innerHTML = `<div class="alert alert-err">${e.message}</div>`; });
 }
 
-function renderFunnelPage(status, fd) {
-  const SERVICES = [
-    { id: 'meta',     icon: '📘', name: 'Meta Ads',   desc: 'Campaign, adset & ad-level insights',    fields: [{k:'token',l:'Access Token',t:'password'},{k:'accountId',l:'Ad Account ID',t:'text',ph:'123456789'}] },
-    { id: 'cashfree', icon: '💳', name: 'Cashfree',   desc: 'Payment orders & webhook',               fields: [{k:'appId',l:'App ID',t:'text'},{k:'secretKey',l:'Secret Key',t:'password'},{k:'env',l:'Environment',t:'select',opts:['prod','sandbox']}] },
-    { id: 'aisensy',  icon: '💬', name: 'AiSensy',    desc: 'WhatsApp group membership check',        fields: [{k:'apiKey',l:'API Key',t:'password'}] },
-    { id: 'mail',     icon: '📧', name: 'Email',      desc: 'Campaign open/click rates',              fields: [{k:'provider',l:'Provider',t:'select',opts:['mailchimp','sendgrid','mailercloud']},{k:'apiKey',l:'API Key',t:'password'},{k:'listId',l:'List/Audience ID',t:'text',ph:'Optional'}] },
-    { id: 'growthx',  icon: '📈', name: 'GrowthX',    desc: 'Revenue events',                         fields: [{k:'apiKey',l:'API Key',t:'password'}] }
-  ];
+function renderFunnelPage(status) {
+  const gxOk  = status.growthx?.connected;
+  const metaOk = status.meta?.connected;
 
-  const connectedCount = SERVICES.filter(s => status[s.id]?.connected).length;
+  $("main-content").innerHTML = `
+<div class="page-header">
+  <div><div class="page-title">🔀 Funnel Analytics</div>
+    <div class="page-sub">Team Abhipsa · GrowthX + Meta + Cashfree + AiSensy</div></div>
+</div>
 
-  let intCards = SERVICES.map(s => {
-    const st = status[s.id] || {};
-    const dot = st.connected ? '🟢' : st.error ? '🔴' : '⚪';
-    const syncInfo = st.syncedAt ? `<span style="font-size:10px;color:var(--muted);">Last sync: ${new Date(st.syncedAt).toLocaleTimeString('en-IN')}</span>` : '';
-    const errInfo  = st.error ? `<div style="font-size:11px;color:var(--err);margin-top:4px;">${st.error}</div>` : '';
-    const rowInfo  = st.rows ? `<span style="font-size:10px;color:var(--ok);">${st.rows} rows</span>` : '';
+<!-- ── GrowthX Live Query ── -->
+<div class="card mb-20">
+  <div class="card-header">
+    <div class="card-title">📈 GrowthX Live Data <span style="font-size:11px;margin-left:8px;color:${gxOk?'var(--ok)':'var(--warn)'};">${gxOk?'🟢 Connected':'⚪ Token via env var GROWTHX_TOKEN'}</span></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;align-items:end;margin-bottom:12px;">
+    <div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">From <span style="color:var(--err);">*</span></label>
+      <input type="date" id="gx-from" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.15);color:#fff;padding:7px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;" />
+    </div>
+    <div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">To <span style="color:var(--err);">*</span> <span style="color:var(--muted);font-size:10px;">(max 31 days)</span></label>
+      <input type="date" id="gx-to" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.15);color:#fff;padding:7px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;" />
+    </div>
+    <button class="btn-primary" onclick="gxFetchLeads()" style="height:36px;white-space:nowrap;">Fetch Leads</button>
+    <button class="btn-secondary" onclick="gxFetchFunnel()" style="height:36px;white-space:nowrap;">Fetch Funnel</button>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+    <div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Group (optional, comma-separated)</label>
+      <input type="text" id="gx-group" placeholder="Contract Drafting,Criminal Litigation..." style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;box-sizing:border-box;" />
+    </div>
+    <div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Lead Type (optional)</label>
+      <input type="text" id="gx-leadtype" placeholder="e.g. test,test2" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;box-sizing:border-box;" />
+    </div>
+    <div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Slug (optional)</label>
+      <input type="text" id="gx-slug" placeholder="e.g. test1,test2" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;box-sizing:border-box;" />
+    </div>
+  </div>
+  <div id="gx-error" style="font-size:12px;color:var(--err);margin-bottom:8px;display:none;"></div>
+  <div id="gx-result"></div>
+</div>
 
-    const fieldsHtml = s.fields.map(f => {
-      if (f.t === 'select') {
-        return `<div class="form-group" style="margin-bottom:8px;">
-          <label style="font-size:11px;color:var(--muted);">${f.l}</label>
-          <select id="int-${s.id}-${f.k}" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:6px 8px;border-radius:6px;font-size:12px;">
-            ${(f.opts||[]).map(o=>`<option value="${o}">${o}</option>`).join('')}
-          </select></div>`;
-      }
-      return `<div class="form-group" style="margin-bottom:8px;">
-        <label style="font-size:11px;color:var(--muted);">${f.l}</label>
-        <input type="${f.t}" id="int-${s.id}-${f.k}" placeholder="${f.ph||''}" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:6px 8px;border-radius:6px;font-size:12px;box-sizing:border-box;"/>
-      </div>`;
-    }).join('');
+<!-- ── Integration Config (collapsible) ── -->
+<div class="card mb-20">
+  <div class="card-header" style="cursor:pointer;" onclick="toggleEl('int-config-body','int-config-chev')">
+    <div class="card-title">⚙️ Integration Config</div>
+    <span id="int-config-chev" style="color:var(--muted);">▼</span>
+  </div>
+  <div id="int-config-body" style="display:none;">
+    ${buildIntConfigCards(status)}
+  </div>
+</div>
 
-    return `<div class="card" style="margin-bottom:16px;">
-      <div class="card-header" style="cursor:pointer;" onclick="toggleIntSection('${s.id}')">
-        <div class="card-title">${s.icon} ${s.name} <span style="font-size:13px;margin-left:6px;">${dot}</span></div>
-        <div style="display:flex;align-items:center;gap:10px;">${rowInfo}${syncInfo}<span id="int-chevron-${s.id}" style="color:var(--muted);font-size:12px;">▼</span></div>
+<!-- ── AiSensy WA Group Check ── -->
+<div class="card mb-20">
+  <div class="card-header">
+    <div class="card-title">💬 AiSensy — Paid Learner WA Group Check</div>
+    <button class="btn-secondary btn-sm" onclick="loadAisensyCheck()">↺ Load</button>
+  </div>
+  <div id="aisensy-check-body"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Connect AiSensy and click Load.</div></div>
+</div>
+
+<!-- ── Email Analytics ── -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">📧 Email Campaign Analytics</div>
+    <button class="btn-secondary btn-sm" onclick="loadMailAnalytics()">↺ Load</button>
+  </div>
+  <div id="mail-analytics-body"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure email integration and click Load.</div></div>
+</div>`;
+
+  // Set sensible default dates: last full month
+  const today = new Date();
+  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const lastOfPrevMonth = new Date(firstOfMonth - 1);
+  const firstOfPrevMonth = new Date(lastOfPrevMonth.getFullYear(), lastOfPrevMonth.getMonth(), 1);
+  const fmt = d => d.toISOString().slice(0, 10);
+  const gxFrom = $("gx-from"); const gxTo = $("gx-to");
+  if (gxFrom) gxFrom.value = fmt(firstOfPrevMonth);
+  if (gxTo)   gxTo.value   = fmt(lastOfPrevMonth);
+
+  // Validate dates on change
+  [gxFrom, gxTo].forEach(el => el && el.addEventListener('change', gxValidateDates));
+}
+
+function gxValidateDates() {
+  const from = ($("gx-from") || {}).value;
+  const to   = ($("gx-to")   || {}).value;
+  const err  = $("gx-error");
+  if (!err) return true;
+  if (!from || !to) { err.textContent = 'Both dates are required.'; err.style.display=''; return false; }
+  const days = (new Date(to) - new Date(from)) / 86400000;
+  if (days < 0) { err.textContent = '"From" must be before "To".'; err.style.display=''; return false; }
+  if (days > 31) { err.textContent = `Date range is ${Math.round(days)} days — max 31 days allowed.`; err.style.display=''; return false; }
+  err.style.display = 'none';
+  return true;
+}
+
+window.gxFetchLeads = function() {
+  if (!gxValidateDates()) return;
+  const from = $("gx-from").value, to = $("gx-to").value;
+  const group = ($("gx-group") || {}).value || '';
+  const leadtype = ($("gx-leadtype") || {}).value || '';
+  const slug = ($("gx-slug") || {}).value || '';
+  const result = $("gx-result");
+  if (result) result.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Fetching leads...</div>`;
+  fetch('/api/growthx/leads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to, group: group || undefined, leadtype: leadtype || undefined, slug: slug || undefined })
+  }).then(r => r.json()).then(d => {
+    if (d.error) { if (result) result.innerHTML = `<div class="alert alert-err" style="margin:0;">${d.error}</div>`; return; }
+    renderGxLeads(d.data, from, to);
+  }).catch(e => { if (result) result.innerHTML = `<div class="alert alert-err" style="margin:0;">${e.message}</div>`; });
+};
+
+window.gxFetchFunnel = function() {
+  if (!gxValidateDates()) return;
+  const from = $("gx-from").value, to = $("gx-to").value;
+  const result = $("gx-result");
+  if (result) result.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Fetching funnel...</div>`;
+  fetch('/api/growthx/funnel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to })
+  }).then(r => r.json()).then(d => {
+    if (d.error) { if (result) result.innerHTML = `<div class="alert alert-err" style="margin:0;">${d.error}</div>`; return; }
+    renderGxFunnel(d.data, from, to);
+  }).catch(e => { if (result) result.innerHTML = `<div class="alert alert-err" style="margin:0;">${e.message}</div>`; });
+};
+
+function renderGxLeads(data, from, to) {
+  const result = $("gx-result");
+  if (!result) return;
+  // data can be array of leads or object with leads array
+  const leads = Array.isArray(data) ? data : (data?.leads || data?.data || []);
+  if (!leads.length) {
+    result.innerHTML = `<div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">No leads found for ${from} → ${to}</div>`;
+    return;
+  }
+  // Figure out column keys from first row
+  const allKeys = Object.keys(leads[0] || {});
+  const priority = ['name','email','phone','group','leadtype','slug','created_at','status','source'];
+  const cols = [...priority.filter(k => allKeys.includes(k)), ...allKeys.filter(k => !priority.includes(k))].slice(0, 10);
+
+  // Summary by vertical/group
+  const byGroup = {};
+  leads.forEach(l => {
+    const g = l.group || l.community || 'Unknown';
+    byGroup[g] = (byGroup[g] || 0) + 1;
+  });
+  const groupSummary = Object.entries(byGroup).sort((a,b)=>b[1]-a[1]).slice(0,8)
+    .map(([g, n]) => `<div class="kpi-card" style="min-width:120px;"><div class="kpi-val">${n}</div><div class="kpi-label" style="font-size:10px;">${g.length>18?g.slice(0,18)+'…':g}</div></div>`).join('');
+
+  const rows = leads.slice(0, 100).map(l => `<tr>${cols.map(k => `<td style="font-size:11px;">${l[k]??''}</td>`).join('')}</tr>`).join('');
+
+  result.innerHTML = `
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;padding:12px 0 0;">
+  <div class="kpi-card"><div class="kpi-val">${leads.length}</div><div class="kpi-label">Total Leads</div></div>
+  ${groupSummary}
+</div>
+<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Showing first 100 of ${leads.length} leads · ${from} → ${to}</div>
+<div class="table-wrap"><table>
+  <thead><tr>${cols.map(k=>`<th>${k}</th>`).join('')}</tr></thead>
+  <tbody>${rows}</tbody>
+</table></div>`;
+}
+
+function renderGxFunnel(data, from, to) {
+  const result = $("gx-result");
+  if (!result) return;
+
+  // data is typically array of funnel stages or object with stages
+  const stages = Array.isArray(data) ? data : (data?.stages || data?.data || data?.funnels || []);
+
+  if (!stages.length) {
+    result.innerHTML = `<div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">No funnel data for ${from} → ${to}</div>`;
+    return;
+  }
+
+  // Try to identify stage name and count keys
+  const first = stages[0] || {};
+  const nameKey  = ['name','stage','label','title','funnel_name','community'].find(k => first[k]) || Object.keys(first)[0];
+  const countKey = ['count','total','leads','value','users','sessions'].find(k => typeof first[k] === 'number') || Object.keys(first).find(k => typeof first[k] === 'number') || 'count';
+  const convKey  = ['cvr','conversion_rate','rate','conv'].find(k => first[k] !== undefined);
+
+  const max = Math.max(...stages.map(s => parseFloat(s[countKey]) || 0), 1);
+
+  const stageHtml = stages.map((s, i) => {
+    const label = s[nameKey] || `Stage ${i+1}`;
+    const count = parseFloat(s[countKey]) || 0;
+    const conv  = convKey ? parseFloat(s[convKey]) : (i > 0 ? (count / (parseFloat(stages[i-1][countKey])||1) * 100) : 100);
+    const pct   = Math.max(4, Math.round((count / max) * 100));
+    const clr   = conv < 20 ? 'var(--err)' : conv < 50 ? 'var(--warn)' : 'var(--ok)';
+    const drop  = i > 0 ? (100 - conv).toFixed(1) : null;
+    return `<div style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+        <span style="color:#fff;font-weight:500;">${label}</span>
+        <span style="color:#fff;">${fmtNum(count)} ${drop?`<span style="font-size:10px;color:${clr};">↓${drop}%</span>`:'<span style="font-size:10px;color:var(--ok);">top</span>'}</span>
       </div>
-      ${errInfo}
-      <div id="int-section-${s.id}" style="display:none;padding:16px 0 0;">
-        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">${s.desc}</p>
-        ${fieldsHtml}
-        <div style="display:flex;gap:8px;margin-top:4px;">
-          <button class="btn-primary btn-sm" onclick="saveIntConfig('${s.id}')">Save</button>
-          ${st.connected ? `<button class="btn-secondary btn-sm" onclick="syncInt('${s.id}')"><span class="spinner" id="int-spin-${s.id}" style="display:none;"></span> Sync Now</button>` : ''}
-        </div>
-        <div id="int-result-${s.id}" style="font-size:11px;margin-top:8px;"></div>
+      <div style="background:var(--ink3);border-radius:4px;height:10px;">
+        <div style="width:${pct}%;background:var(--red);height:100%;border-radius:4px;"></div>
       </div>
     </div>`;
   }).join('');
 
-  // Cashfree webhook info
-  const webhookUrl = status.webhookUrl || window.location.origin + '/api/webhook/payment';
+  // Raw table of all keys
+  const allCols = Object.keys(first).slice(0, 12);
+  const tableRows = stages.map(s => `<tr>${allCols.map(k=>`<td style="font-size:11px;">${s[k]??''}</td>`).join('')}</tr>`).join('');
 
-  // Build funnel visuals
-  const funnelHtml = fd ? buildFunnelVisuals(fd) : `<div class="card"><div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">Connect Meta Ads and trigger a sync to see funnel data.</div></div>`;
-
-  $("main-content").innerHTML = `
-<div class="page-header">
-  <div>
-    <div class="page-title">🔀 Funnel Analytics</div>
-    <div class="page-sub">${connectedCount}/${SERVICES.length} integrations connected</div>
-  </div>
-  <div style="display:flex;gap:8px;">
-    <button class="btn-secondary btn-sm" onclick="syncAllInt()">↺ Sync All</button>
-    <button class="btn-primary btn-sm" onclick="refreshFunnelData()">↻ Refresh Charts</button>
-  </div>
-</div>
-
-<div style="display:grid;grid-template-columns:360px 1fr;gap:20px;align-items:start;">
-  <!-- LEFT: Integrations config -->
-  <div>
-    <div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-bottom:12px;">Integrations</div>
-    ${intCards}
-    <div class="card">
-      <div class="card-header"><div class="card-title">🔗 Cashfree Webhook</div></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Add this URL in Cashfree → Developers → Webhooks to receive real-time payments:</div>
-      <div style="background:var(--ink3);border-radius:6px;padding:10px;font-family:monospace;font-size:11px;color:var(--ok);word-break:break-all;">${webhookUrl}</div>
-    </div>
-  </div>
-
-  <!-- RIGHT: Funnel charts -->
-  <div id="funnel-charts-area">
-    ${funnelHtml}
-  </div>
-</div>`;
+  result.innerHTML = `
+<div style="padding:4px 0 16px;font-size:11px;color:var(--muted);">${from} → ${to} · ${stages.length} stages</div>
+<div style="margin-bottom:20px;">${stageHtml}</div>
+<div class="table-wrap"><table>
+  <thead><tr>${allCols.map(k=>`<th>${k}</th>`).join('')}</tr></thead>
+  <tbody>${tableRows}</tbody>
+</table></div>`;
 }
 
-function toggleIntSection(id) {
-  const sec = $(`int-section-${id}`);
-  const chev = $(`int-chevron-${id}`);
-  if (!sec) return;
-  const open = sec.style.display !== 'none';
-  sec.style.display = open ? 'none' : '';
-  if (chev) chev.textContent = open ? '▼' : '▲';
+function buildIntConfigCards(status) {
+  const SERVICES = [
+    { id: 'meta',     icon: '📘', name: 'Meta Ads',   fields: [{k:'token',l:'Access Token',t:'password'},{k:'accountId',l:'Ad Account ID',t:'text',ph:'123456789'}] },
+    { id: 'cashfree', icon: '💳', name: 'Cashfree',   fields: [{k:'appId',l:'App ID',t:'text'},{k:'secretKey',l:'Secret Key',t:'password'},{k:'env',l:'Env',t:'select',opts:['prod','sandbox']}] },
+    { id: 'aisensy',  icon: '💬', name: 'AiSensy',    fields: [{k:'apiKey',l:'API Key',t:'password'}] },
+    { id: 'growthx',  icon: '📈', name: 'GrowthX',    fields: [{k:'apiKey',l:'Bearer Token',t:'password',ph:'Set GROWTHX_TOKEN in Railway env vars'}] },
+    { id: 'mail',     icon: '📧', name: 'Email',      fields: [{k:'provider',l:'Provider',t:'select',opts:['mailchimp','sendgrid','mailercloud']},{k:'apiKey',l:'API Key',t:'password'}] }
+  ];
+
+  return `<div style="padding:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+  ${SERVICES.map(s => {
+    const st = status[s.id] || {};
+    const dot = st.connected ? '🟢' : st.error ? '🔴' : '⚪';
+    const errHtml = st.error ? `<div style="font-size:11px;color:var(--err);margin-bottom:8px;">${st.error}</div>` : '';
+    const syncInfo = st.syncedAt ? `<div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Last sync: ${new Date(st.syncedAt).toLocaleTimeString('en-IN')}</div>` : '';
+    const fieldsHtml = s.fields.map(f => {
+      if (f.t === 'select') return `<div style="margin-bottom:6px;"><label style="font-size:10px;color:var(--muted);display:block;">${f.l}</label><select id="int-${s.id}-${f.k}" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:5px 8px;border-radius:5px;font-size:12px;">${(f.opts||[]).map(o=>`<option>${o}</option>`).join('')}</select></div>`;
+      return `<div style="margin-bottom:6px;"><label style="font-size:10px;color:var(--muted);display:block;">${f.l}</label><input type="${f.t}" id="int-${s.id}-${f.k}" placeholder="${f.ph||''}" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:5px 8px;border-radius:5px;font-size:12px;box-sizing:border-box;"/></div>`;
+    }).join('');
+    return `<div style="background:var(--ink3);border-radius:8px;padding:14px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px;">${s.icon} ${s.name} <span style="float:right;">${dot}</span></div>
+      ${errHtml}${syncInfo}${fieldsHtml}
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <button class="btn-primary btn-sm" onclick="saveIntConfig('${s.id}')">Save</button>
+        <button class="btn-secondary btn-sm" onclick="syncInt('${s.id}')"><span class="spinner" id="int-spin-${s.id}" style="display:none;width:10px;height:10px;"></span> Sync</button>
+      </div>
+      <div id="int-result-${s.id}" style="font-size:11px;margin-top:6px;"></div>
+    </div>`;
+  }).join('')}
+  </div>
+  <div style="padding:0 0 12px;">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Cashfree webhook — add in Cashfree → Developers → Webhooks:</div>
+    <div style="background:var(--ink3);border-radius:6px;padding:8px 12px;font-family:monospace;font-size:11px;color:var(--ok);word-break:break-all;" id="webhook-url-display">${window.location.origin}/api/webhook/payment</div>
+  </div>`;
 }
+
+window.toggleEl = function(bodyId, chevId) {
+  const el = $(bodyId), ch = $(chevId);
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : '';
+  if (ch) ch.textContent = open ? '▼' : '▲';
+};
 
 window.saveIntConfig = function(serviceId) {
-  const FIELDS = {
-    meta:     ['token','accountId'],
-    cashfree: ['appId','secretKey','env'],
-    aisensy:  ['apiKey'],
-    mail:     ['provider','apiKey','listId'],
-    growthx:  ['apiKey']
-  };
-  const fields = FIELDS[serviceId] || [];
+  const FIELDS = { meta:['token','accountId'], cashfree:['appId','secretKey','env'], aisensy:['apiKey'], mail:['provider','apiKey'], growthx:['apiKey'] };
   const payload = { service: serviceId };
-  fields.forEach(f => {
+  (FIELDS[serviceId]||[]).forEach(f => {
     const el = $(`int-${serviceId}-${f}`);
     if (el && el.value.trim()) payload[f] = el.value.trim();
   });
   const result = $(`int-result-${serviceId}`);
-  if (result) result.innerHTML = `<span class="text-muted"><span class="spinner"></span> Saving...</span>`;
+  if (result) result.innerHTML = `<span class="text-muted"><span class="spinner" style="width:10px;height:10px;"></span> Saving...</span>`;
   fetch('/api/integrations/configure', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
     .then(r => r.json())
-    .then(() => {
-      if (result) result.innerHTML = `<span class="text-ok">✓ Saved. Click Sync Now to fetch data.</span>`;
-      setTimeout(() => funnel(), 1500);
-    })
+    .then(() => { if (result) result.innerHTML = `<span class="text-ok">✓ Saved</span>`; })
     .catch(e => { if (result) result.innerHTML = `<span class="text-err">${e.message}</span>`; });
 };
 
 window.syncInt = function(serviceId) {
   const spin = $(`int-spin-${serviceId}`);
   const result = $(`int-result-${serviceId}`);
-  if (spin) spin.style.display = '';
+  if (spin) spin.style.display = 'inline-block';
   if (result) result.innerHTML = `<span class="text-muted">Syncing...</span>`;
   fetch(`/api/integrations/sync/${serviceId}`, { method:'POST' })
     .then(r => r.json())
     .then(d => {
       if (spin) spin.style.display = 'none';
-      if (d.error) {
-        if (result) result.innerHTML = `<span class="text-err">Error: ${d.error}</span>`;
-      } else {
-        if (result) result.innerHTML = `<span class="text-ok">✓ Synced — ${d.rows} rows</span>`;
-        refreshFunnelData();
-      }
+      if (d.error) { if (result) result.innerHTML = `<span class="text-err">${d.error}</span>`; }
+      else { if (result) result.innerHTML = `<span class="text-ok">✓ Synced${d.rows ? ' — '+d.rows+' rows' : ''}</span>`; }
     })
     .catch(e => {
       if (spin) spin.style.display = 'none';
@@ -1986,201 +2133,27 @@ window.syncInt = function(serviceId) {
     });
 };
 
-window.syncAllInt = function() {
-  ['meta','cashfree','aisensy','mail','growthx'].forEach(s => {
-    fetch(`/api/integrations/sync/${s}`, { method:'POST' }).catch(()=>{});
-  });
-  setTimeout(() => refreshFunnelData(), 5000);
-};
-
-window.refreshFunnelData = function() {
-  const area = $("funnel-charts-area");
-  if (area) area.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted);"><div class="spinner"></div></div>`;
-  fetch('/api/funnel').then(r => r.json()).then(fd => {
-    if (area) area.innerHTML = buildFunnelVisuals(fd);
-    drawFunnelCharts(fd);
-  }).catch(() => {});
-};
-
-function buildFunnelVisuals(fd) {
-  if (!fd) return '';
-  const { byVertical, campaignFunnels } = fd;
-
-  // Summary row
-  const totals = byVertical.reduce((acc, v) => {
-    v.funnel.forEach(f => { acc[f.stage] = (acc[f.stage] || 0) + f.count; });
-    acc._spend  = (acc._spend  || 0) + (v.funnel[0]?.spend || 0);
-    acc._revenue= (acc._revenue|| 0) + (v.funnel.find(f=>f.stage==='Enrolled (Paid)')?.revenue || 0);
-    return acc;
-  }, {});
-
-  const summaryCards = [
-    { label: 'Total Impressions', val: fmtNum(totals['Ad Impressions'] || 0), icon: '👁' },
-    { label: 'Total Leads',       val: fmtNum(totals['Total Leads'] || totals['Ad Leads'] || 0), icon: '🎯' },
-    { label: 'Enrolled (Paid)',   val: fmtNum(totals['Enrolled (Paid)'] || 0), icon: '✅' },
-    { label: 'Revenue (Live)',    val: formatINR(totals._revenue || 0), icon: '💰' },
-    { label: 'Ad Spend',          val: formatINR(totals._spend || 0), icon: '📘' },
-    { label: 'ROAS',              val: totals._spend > 0 ? (totals._revenue / totals._spend).toFixed(2) + 'x' : '—', icon: '📊' }
-  ].map(c => `<div class="kpi-card"><div class="kpi-icon">${c.icon}</div><div class="kpi-val">${c.val}</div><div class="kpi-label">${c.label}</div></div>`).join('');
-
-  // Per-vertical funnel cards
-  const vertCards = byVertical.filter(v => v.funnel.some(f => f.count > 0)).map(v => {
-    const stages = v.funnel.filter(f => f.count > 0);
-    const top = stages[0]?.count || 1;
-    const stagesHtml = stages.map(f => {
-      const pct = Math.max(5, Math.round((f.count / top) * 100));
-      const rev = f.revenue ? ` · ${formatINR(f.revenue)}` : '';
-      const spend = f.spend ? ` · ${formatINR(f.spend)} spent` : '';
-      return `<div style="margin-bottom:8px;">
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:3px;">
-          <span>${f.stage}</span><span style="color:#fff;">${fmtNum(f.count)}${rev}${spend}</span>
-        </div>
-        <div style="background:var(--ink3);border-radius:4px;height:8px;overflow:hidden;">
-          <div style="width:${pct}%;background:var(--red);height:100%;border-radius:4px;transition:width .4s;"></div>
-        </div>
-      </div>`;
-    }).join('');
-
-    const dropHtml = (v.dropoffs || []).map(d => {
-      const clr = d.status === 'red' ? 'var(--err)' : d.status === 'amber' ? 'var(--warn)' : 'var(--ok)';
-      return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);">
-        <span style="color:var(--muted);">${d.label}</span>
-        <span style="color:${clr};">↓${d.dropRate}% <span style="color:var(--muted);">(${d.convRate}% conv)</span></span>
-      </div>`;
-    }).join('');
-
-    const cpl = v.cpl ? `CPL ${formatINR(v.cpl)}` : '';
-    const roas = v.roas ? ` · ROAS ${v.roas.toFixed(2)}x` : '';
-
-    return `<div class="card" style="margin-bottom:16px;">
-      <div class="card-header">
-        <div class="card-title">${v.vertical} Funnel</div>
-        <div style="font-size:11px;color:var(--muted);">${cpl}${roas}</div>
-      </div>
-      <div style="padding:4px 0;">
-        ${stagesHtml}
-        ${dropHtml ? `<div style="margin-top:12px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);">${dropHtml}</div>` : ''}
-      </div>
-      <canvas id="funnel-chart-${v.vertical}" height="60" style="margin-top:12px;"></canvas>
-    </div>`;
-  }).join('');
-
-  // Campaign table
-  const campRows = (campaignFunnels || []).slice(0, 15).map(c => {
-    const roas = c.roas ? c.roas.toFixed(2) + 'x' : '—';
-    const cpl  = c.cpl  ? formatINR(c.cpl) : '—';
-    const cvrClick = c.clicks > 0 ? ((c.leads / c.clicks) * 100).toFixed(1) + '%' : '—';
-    const statusDot = c.status === 'ACTIVE' ? '🟢' : c.status === 'PAUSED' ? '🟡' : '⚪';
-    return `<tr>
-      <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.campaignName}">${statusDot} ${c.campaignName}</td>
-      <td><span class="badge badge-info" style="font-size:10px;">${c.vertical}</span></td>
-      <td>${formatINR(c.spend)}</td>
-      <td>${fmtNum(c.impressions)}</td>
-      <td>${fmtNum(c.clicks)}</td>
-      <td>${fmtNum(c.leads)}</td>
-      <td>${cpl}</td>
-      <td>${cvrClick}</td>
-      <td>${fmtNum(c.enrolled)}</td>
-      <td style="color:${c.roas >= 3 ? 'var(--ok)' : c.roas >= 1 ? 'var(--warn)' : 'var(--err)'};">${roas}</td>
-    </tr>`;
-  }).join('');
-
-  // AiSensy group check
-  const aisensyData = null; // loaded separately
-  const missingHtml = ''; // populated after sync
-
-  return `
-<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:20px;">${summaryCards}</div>
-
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:20px;">
-  ${vertCards || '<div class="card"><div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">No funnel data yet — connect Meta Ads and sync.</div></div>'}
-</div>
-
-<div class="card mb-20">
-  <div class="card-header">
-    <div class="card-title">📘 Campaign Performance Table</div>
-    <div style="font-size:11px;color:var(--muted);">Meta Ads — last 90 days</div>
-  </div>
-  ${campRows ? `<div class="table-wrap"><table>
-    <thead><tr><th>Campaign</th><th>Vertical</th><th>Spend</th><th>Impressions</th><th>Clicks</th><th>Leads</th><th>CPL</th><th>Click→Lead</th><th>Enrolled</th><th>ROAS</th></tr></thead>
-    <tbody>${campRows}</tbody>
-  </table></div>` : `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">No campaign data. Connect Meta Ads and sync.</div>`}
-</div>
-
-<div class="card" id="aisensy-check-card">
-  <div class="card-header">
-    <div class="card-title">💬 AiSensy — Paid Learner WA Group Check</div>
-    <button class="btn-secondary btn-sm" onclick="loadAisensyCheck()">↺ Load</button>
-  </div>
-  <div id="aisensy-check-body"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Click Load to cross-check paid learners against WhatsApp groups.</div></div>
-</div>
-
-<div class="card" id="mail-analytics-card" style="margin-top:16px;">
-  <div class="card-header">
-    <div class="card-title">📧 Email Campaign Analytics</div>
-    <button class="btn-secondary btn-sm" onclick="loadMailAnalytics()">↺ Load</button>
-  </div>
-  <div id="mail-analytics-body"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Click Load after syncing your email integration.</div></div>
-</div>`;
-}
-
-function drawFunnelCharts(fd) {
-  if (!fd || !fd.byVertical) return;
-  fd.byVertical.forEach(v => {
-    const canvas = document.getElementById(`funnel-chart-${v.vertical}`);
-    if (!canvas) return;
-    const stages = v.funnel.filter(f => f.count > 0).slice(0, 6);
-    if (!stages.length) return;
-    const ctx = canvas.getContext('2d');
-    if (charts[`funnel-${v.vertical}`]) charts[`funnel-${v.vertical}`].destroy();
-    charts[`funnel-${v.vertical}`] = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: stages.map(s => s.stage.length > 14 ? s.stage.slice(0,14)+'…' : s.stage),
-        datasets: [{ data: stages.map(s => s.count), backgroundColor: 'rgba(200,16,46,0.7)', borderRadius: 4 }]
-      },
-      options: {
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { color: '#6b7280', font: { size: 9 } }, grid: { display: false } },
-          y: { ticks: { color: '#6b7280', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,.05)' } }
-        }
-      }
-    });
-  });
-}
-
 window.loadAisensyCheck = function() {
   const body = $("aisensy-check-body");
   if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span></div>`;
   fetch('/api/integrations/data').then(r => r.json()).then(d => {
     const checks = d.aisensy?.checks || [];
-    if (!checks.length) {
-      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Connect AiSensy and sync first.</div>`;
-      return;
-    }
+    if (!checks.length) { if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Connect AiSensy and sync first.</div>`; return; }
     const missing = checks.filter(c => !c.inCorrectGroup);
     const ok      = checks.filter(c => c.inCorrectGroup);
-    const rows = missing.slice(0, 50).map(c => `<tr>
-      <td style="font-size:11px;">${c.name}</td>
-      <td style="font-size:11px;">${c.email || c.phone || ''}</td>
-      <td style="font-size:11px;">${c.community || ''}</td>
-      <td style="font-size:11px;">${formatINR(c.amount || 0)}</td>
-      <td style="font-size:11px;">${c.paidDate ? new Date(c.paidDate).toLocaleDateString('en-IN') : ''}</td>
-      <td><span class="badge ${c.found ? 'badge-warn' : 'badge-err'}">${c.found ? 'Contact found, wrong group' : 'Not in AiSensy'}</span></td>
+    const rows = missing.slice(0,50).map(c => `<tr>
+      <td style="font-size:11px;">${c.name}</td><td style="font-size:11px;">${c.email||c.phone||''}</td>
+      <td style="font-size:11px;">${c.community||''}</td><td style="font-size:11px;">${formatINR(c.amount||0)}</td>
+      <td><span class="badge ${c.found?'badge-warn':'badge-err'}" style="font-size:10px;">${c.found?'Wrong group':'Not in AiSensy'}</span></td>
     </tr>`).join('');
-
     if (body) body.innerHTML = `
-      <div style="display:flex;gap:16px;padding:12px 0 16px;border-bottom:1px solid rgba(255,255,255,.06);">
-        <div class="kpi-card" style="flex:1;"><div class="kpi-val" style="color:var(--ok);">${ok.length}</div><div class="kpi-label">Correctly in group</div></div>
-        <div class="kpi-card" style="flex:1;"><div class="kpi-val" style="color:var(--err);">${missing.length}</div><div class="kpi-label">Missing / wrong group</div></div>
+      <div style="display:flex;gap:12px;padding:12px 0 16px;">
+        <div class="kpi-card" style="flex:1;"><div class="kpi-val" style="color:var(--ok);">${ok.length}</div><div class="kpi-label">In group ✓</div></div>
+        <div class="kpi-card" style="flex:1;"><div class="kpi-val" style="color:var(--err);">${missing.length}</div><div class="kpi-label">Missing / wrong</div></div>
         <div class="kpi-card" style="flex:1;"><div class="kpi-val">${checks.length}</div><div class="kpi-label">Total checked</div></div>
       </div>
-      ${missing.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>Name</th><th>Contact</th><th>Community</th><th>Amount</th><th>Paid Date</th><th>Status</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>` : `<div style="padding:16px;text-align:center;color:var(--ok);font-size:13px;">✓ All paid learners are in the correct WA groups.</div>`}`;
-  }).catch(() => { if (body) body.innerHTML = `<div style="padding:16px;color:var(--err);font-size:12px;">Load failed.</div>`; });
+      ${missing.length?`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Community</th><th>Paid</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div style="padding:12px;text-align:center;color:var(--ok);">✓ All paid learners are in correct WA groups.</div>`}`;
+  }).catch(() => { if (body) body.innerHTML = `<div style="padding:16px;color:var(--err);">Load failed.</div>`; });
 };
 
 window.loadMailAnalytics = function() {
@@ -2188,42 +2161,31 @@ window.loadMailAnalytics = function() {
   if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span></div>`;
   fetch('/api/integrations/data').then(r => r.json()).then(d => {
     const campaigns = d.mail || [];
-    if (!campaigns.length) {
-      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure email integration and sync first.</div>`;
-      return;
-    }
-    const avgOpen  = campaigns.reduce((s, c) => s + (c.openRate || 0), 0) / campaigns.length;
-    const avgClick = campaigns.reduce((s, c) => s + (c.clickRate || 0), 0) / campaigns.length;
-    const rows = campaigns.slice(0, 30).map(c => {
-      const openClr  = (c.openRate||0) > 25 ? 'var(--ok)' : (c.openRate||0) > 15 ? 'var(--warn)' : 'var(--err)';
-      const clickClr = (c.clickRate||0) > 3 ? 'var(--ok)' : (c.clickRate||0) > 1 ? 'var(--warn)' : 'var(--err)';
-      return `<tr>
-        <td style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.subject}">${c.subject}</td>
-        <td style="font-size:11px;">${c.sentAt ? new Date(c.sentAt).toLocaleDateString('en-IN') : ''}</td>
-        <td style="font-size:11px;">${fmtNum(c.recipients || 0)}</td>
-        <td style="font-size:11px;color:${openClr};">${((c.openRate||0)*100).toFixed(1)}%</td>
-        <td style="font-size:11px;color:${clickClr};">${((c.clickRate||0)*100).toFixed(1)}%</td>
-        <td style="font-size:11px;color:var(--err);">${fmtNum(c.bounces||0)}</td>
-        <td style="font-size:11px;">${fmtNum(c.unsubscribes||0)}</td>
-      </tr>`;
+    if (!campaigns.length) { if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure email integration and sync first.</div>`; return; }
+    const avgOpen  = campaigns.reduce((s,c)=>s+(c.openRate||0),0)/campaigns.length;
+    const avgClick = campaigns.reduce((s,c)=>s+(c.clickRate||0),0)/campaigns.length;
+    const rows = campaigns.slice(0,30).map(c => {
+      const or = ((c.openRate||0)*100).toFixed(1), cr = ((c.clickRate||0)*100).toFixed(1);
+      return `<tr><td style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${c.subject}">${c.subject}</td>
+        <td style="font-size:11px;">${c.sentAt?new Date(c.sentAt).toLocaleDateString('en-IN'):''}</td>
+        <td style="font-size:11px;">${fmtNum(c.recipients||0)}</td>
+        <td style="font-size:11px;color:${parseFloat(or)>25?'var(--ok)':parseFloat(or)>15?'var(--warn)':'var(--err)'};">${or}%</td>
+        <td style="font-size:11px;color:${parseFloat(cr)>3?'var(--ok)':parseFloat(cr)>1?'var(--warn)':'var(--err)'};">${cr}%</td>
+        <td style="font-size:11px;">${fmtNum(c.bounces||0)}</td></tr>`;
     }).join('');
-
     if (body) body.innerHTML = `
-      <div style="display:flex;gap:12px;padding:8px 0 16px;">
+      <div style="display:flex;gap:12px;padding:12px 0 16px;">
         <div class="kpi-card" style="flex:1;"><div class="kpi-val">${(avgOpen*100).toFixed(1)}%</div><div class="kpi-label">Avg Open Rate</div></div>
         <div class="kpi-card" style="flex:1;"><div class="kpi-val">${(avgClick*100).toFixed(1)}%</div><div class="kpi-label">Avg Click Rate</div></div>
         <div class="kpi-card" style="flex:1;"><div class="kpi-val">${campaigns.length}</div><div class="kpi-label">Campaigns</div></div>
       </div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Subject</th><th>Sent</th><th>Recipients</th><th>Open Rate</th><th>Click Rate</th><th>Bounces</th><th>Unsubs</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>`;
-  }).catch(() => { if (body) body.innerHTML = `<div style="padding:16px;color:var(--err);font-size:12px;">Load failed.</div>`; });
+      <div class="table-wrap"><table><thead><tr><th>Subject</th><th>Sent</th><th>Recipients</th><th>Open Rate</th><th>Click Rate</th><th>Bounces</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).catch(() => { if (body) body.innerHTML = `<div style="padding:16px;color:var(--err);">Load failed.</div>`; });
 };
 
 function fmtNum(n) {
-  n = parseInt(n) || 0;
-  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
-  if (n >= 1000)    return (n/1000).toFixed(1) + 'K';
+  n = parseInt(n)||0;
+  if (n>=1000000) return (n/1000000).toFixed(1)+'M';
+  if (n>=1000)    return (n/1000).toFixed(1)+'K';
   return n.toString();
 }
