@@ -990,11 +990,14 @@ app.post('/api/webhook/sharefree', (req, res) => {
 // ── INTEGRATIONS STORE ───────────────────────────────────────
 // Holds credentials + fetched data in memory (never written to disk)
 let INTEGRATIONS = {
-  meta:      { token: null, accountId: null, data: null, syncedAt: null, error: null },
-  cashfree:  { appId: null, secretKey: null, env: 'prod', data: null, syncedAt: null, error: null },
-  aisensy:   { apiKey: null, data: null, syncedAt: null, error: null },
-  growthx:   { apiKey: null, data: null, syncedAt: null, error: null },
-  mail:      { provider: null, apiKey: null, listId: null, data: null, syncedAt: null, error: null }
+  meta:       { token: null, accountId: null, data: null, syncedAt: null, error: null },
+  cashfree:   { appId: null, secretKey: null, env: 'prod', data: null, syncedAt: null, error: null },
+  aisensy:    { apiKey: null, data: null, syncedAt: null, error: null },
+  growthx:    { apiKey: null, data: null, syncedAt: null, error: null },
+  mail:       { provider: null, apiKey: null, listId: null, data: null, syncedAt: null, error: null },
+  lsq:        { accessKey: null, secretKey: null, host: 'api.leadsquared.com', data: null, syncedAt: null, error: null },
+  aceconnect: { apiKey: null, baseUrl: null, data: null, syncedAt: null, error: null },
+  salesa:     { apiKey: null, workspaceId: null, data: null, syncedAt: null, error: null }
 };
 
 // ── HTTP HELPER ──────────────────────────────────────────────
@@ -1336,6 +1339,167 @@ function loadStaticDataOnStartup() {
   } catch(e) { console.warn('loadStaticDataOnStartup failed:', e.message); }
 }
 
+// ── LSQ (LeadSquared) ────────────────────────────────────────
+async function syncLSQ() {
+  const { accessKey, secretKey, host } = INTEGRATIONS.lsq;
+  if (!accessKey || !secretKey) throw new Error('LSQ Access Key and Secret Key required');
+  INTEGRATIONS.lsq.error = null;
+  const baseUrl = `https://${host || 'api.leadsquared.com'}/v2/LeadManagement.svc`;
+
+  // Fetch recent leads (last 30 days)
+  const toDate = new Date().toISOString().slice(0,10);
+  const fromDate = new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0,10);
+  const searchUrl = `${baseUrl}/RetrieveLeadsByFilter?accessKey=${accessKey}&secretKey=${secretKey}`;
+
+  const payload = {
+    Columns: { Include_CSV: 'ProspectID,FirstName,LastName,EmailAddress,Phone,CreatedOn,Stage,Source,mx_Custom_1' },
+    Sorting: { ColumnName: 'CreatedOn', Direction: 'desc' },
+    Paging: { PageIndex: 1, PageSize: 200 },
+    SearchParameters: [
+      { Attribute: 'CreatedOn', Operator: 'GreaterThan', Value: fromDate },
+      { Attribute: 'CreatedOn', Operator: 'LessThan', Value: toDate }
+    ]
+  };
+
+  const r = await httpPost(searchUrl, payload, { 'Content-Type': 'application/json' });
+  if (r.status !== 200) throw new Error(`LSQ API ${r.status}: ${JSON.stringify(r.data).slice(0,120)}`);
+
+  const leads = (r.data?.Leads || r.data || []).map(l => ({
+    id: l.ProspectID || l.Id,
+    name: `${l.FirstName||''} ${l.LastName||''}`.trim(),
+    email: l.EmailAddress || l.Email || '',
+    phone: l.Phone || '',
+    stage: l.Stage || l.mx_Stage || '',
+    source: l.Source || '',
+    createdOn: l.CreatedOn || '',
+    vertical: (l.mx_Custom_1 || l.Source || '').includes('Contract') ? 'CD' :
+              (l.mx_Custom_1 || l.Source || '').includes('Criminal') ? 'CL' :
+              (l.mx_Custom_1 || l.Source || '').includes('Independent') ? 'ID' :
+              (l.mx_Custom_1 || l.Source || '').includes('Women') ? 'AIW' :
+              (l.mx_Custom_1 || l.Source || '').includes('AI') ? 'AI' : 'Other'
+  }));
+
+  // Also fetch activities summary
+  let activities = [];
+  try {
+    const actUrl = `${baseUrl}/RetrieveActivityByLeadId?accessKey=${accessKey}&secretKey=${secretKey}&leadId=${leads[0]?.id || ''}`;
+    const ar = await httpGet(actUrl);
+    activities = ar.data?.LeadActivities || [];
+  } catch(e) { /* optional */ }
+
+  INTEGRATIONS.lsq.data = { leads, activities, fetchedAt: new Date().toISOString(), fromDate, toDate };
+  INTEGRATIONS.lsq.syncedAt = new Date().toISOString();
+  return INTEGRATIONS.lsq.data;
+}
+
+// ── AceConnect ──────────────────────────────────────────────
+async function syncAceConnect() {
+  const { apiKey, baseUrl } = INTEGRATIONS.aceconnect;
+  if (!apiKey) throw new Error('AceConnect API key required');
+  INTEGRATIONS.aceconnect.error = null;
+  const base = (baseUrl || 'https://api.aceconnect.in').replace(/\/$/, '');
+
+  // Try common AceConnect endpoints
+  const headers = { 'Authorization': `Bearer ${apiKey}`, 'x-api-key': apiKey };
+
+  let contacts = [], calls = [], assignments = [];
+
+  try {
+    const cr = await httpGet(`${base}/api/v1/contacts?limit=200`, headers);
+    contacts = cr.data?.data || cr.data?.contacts || cr.data || [];
+  } catch(e) { /* endpoint may differ */ }
+
+  try {
+    const callr = await httpGet(`${base}/api/v1/calls?limit=200`, headers);
+    calls = callr.data?.data || callr.data?.calls || callr.data || [];
+  } catch(e) { /* optional */ }
+
+  try {
+    const asr = await httpGet(`${base}/api/v1/assignments?limit=200`, headers);
+    assignments = asr.data?.data || asr.data?.assignments || asr.data || [];
+  } catch(e) { /* optional */ }
+
+  if (!Array.isArray(contacts)) {
+    throw new Error(`AceConnect returned unexpected format. Check base URL and API key. Response: ${JSON.stringify(contacts).slice(0,200)}`);
+  }
+
+  const mapped = contacts.map(c => ({
+    id: c.id || c._id,
+    name: c.name || `${c.firstName||''} ${c.lastName||''}`.trim(),
+    email: c.email || '',
+    phone: c.phone || c.mobile || '',
+    status: c.status || c.stage || '',
+    assignedTo: c.assignedTo || c.agent || '',
+    createdAt: c.createdAt || c.created_at || '',
+  }));
+
+  INTEGRATIONS.aceconnect.data = {
+    contacts: mapped,
+    calls: Array.isArray(calls) ? calls.slice(0,100) : [],
+    assignments: Array.isArray(assignments) ? assignments.slice(0,100) : [],
+    syncedAt: new Date().toISOString()
+  };
+  INTEGRATIONS.aceconnect.syncedAt = new Date().toISOString();
+  return INTEGRATIONS.aceconnect.data;
+}
+
+// ── Salesa ───────────────────────────────────────────────────
+async function syncSalesa() {
+  const { apiKey, workspaceId } = INTEGRATIONS.salesa;
+  if (!apiKey) throw new Error('Salesa API key required');
+  INTEGRATIONS.salesa.error = null;
+
+  const headers = { 'Authorization': `Bearer ${apiKey}`, 'x-api-key': apiKey, 'Accept': 'application/json' };
+  const base = 'https://api.salesa.in';
+
+  let leads = [], deals = [], activities = [];
+
+  try {
+    const qp = workspaceId ? `?workspace_id=${workspaceId}&limit=200` : '?limit=200';
+    const lr = await httpGet(`${base}/v1/leads${qp}`, headers);
+    leads = lr.data?.data || lr.data?.leads || lr.data || [];
+  } catch(e) { /* fallback below */ }
+
+  try {
+    const dr = await httpGet(`${base}/v1/deals?limit=200${workspaceId?`&workspace_id=${workspaceId}`:''}`, headers);
+    deals = dr.data?.data || dr.data?.deals || dr.data || [];
+  } catch(e) { /* optional */ }
+
+  try {
+    const ar = await httpGet(`${base}/v1/activities?limit=200`, headers);
+    activities = ar.data?.data || ar.data?.activities || ar.data || [];
+  } catch(e) { /* optional */ }
+
+  if (!Array.isArray(leads)) {
+    throw new Error(`Salesa returned unexpected response. Verify API key and workspace ID. Got: ${JSON.stringify(leads).slice(0,200)}`);
+  }
+
+  const mapped = leads.map(l => ({
+    id: l.id || l._id,
+    name: l.name || l.contact_name || `${l.first_name||''} ${l.last_name||''}`.trim(),
+    email: l.email || l.contact_email || '',
+    phone: l.phone || l.contact_phone || '',
+    stage: l.stage || l.status || l.pipeline_stage || '',
+    owner: l.owner || l.assigned_to || l.agent_name || '',
+    value: parseFloat(l.value || l.deal_value || 0),
+    createdAt: l.created_at || l.createdAt || '',
+    vertical: (l.tags||[]).includes('CD')||String(l.name||'').includes('Contract') ? 'CD' :
+              (l.tags||[]).includes('CL')||String(l.name||'').includes('Criminal') ? 'CL' : 'Other'
+  }));
+
+  INTEGRATIONS.salesa.data = {
+    leads: mapped,
+    deals: Array.isArray(deals) ? deals.slice(0,100).map(d=>({
+      id: d.id, name: d.name||d.title, value: parseFloat(d.value||0),
+      stage: d.stage||d.status, owner: d.owner||d.assigned_to, closedAt: d.closed_at
+    })) : [],
+    activities: Array.isArray(activities) ? activities.slice(0,100) : [],
+    syncedAt: new Date().toISOString()
+  };
+  INTEGRATIONS.salesa.syncedAt = new Date().toISOString();
+  return INTEGRATIONS.salesa.data;
+}
+
 // ── TEAM ABHIPSA FILTER ───────────────────────────────────────
 const ABHIPSA_VERTICALS = new Set(['CD','CL','ID','AI','AIW']);
 function abhipsaOnly(arr) {
@@ -1366,11 +1530,14 @@ app.post('/api/growthx/funnel', async (req, res) => {
 app.get('/api/integrations/status', (req, res) => {
   const gxConnected = !!(INTEGRATIONS.growthx.apiKey || process.env.GROWTHX_TOKEN);
   res.json({
-    meta:     { connected: !!(INTEGRATIONS.meta.token && INTEGRATIONS.meta.accountId), syncedAt: INTEGRATIONS.meta.syncedAt, error: INTEGRATIONS.meta.error, rows: INTEGRATIONS.meta.data?.length || 0 },
-    cashfree: { connected: !!(INTEGRATIONS.cashfree.appId && INTEGRATIONS.cashfree.secretKey), syncedAt: INTEGRATIONS.cashfree.syncedAt, error: INTEGRATIONS.cashfree.error, rows: INTEGRATIONS.cashfree.data?.length || 0 },
-    aisensy:  { connected: !!INTEGRATIONS.aisensy.apiKey, syncedAt: INTEGRATIONS.aisensy.syncedAt, error: INTEGRATIONS.aisensy.error, rows: INTEGRATIONS.aisensy.data?.checks?.length || 0 },
-    growthx:  { connected: gxConnected, syncedAt: INTEGRATIONS.growthx.syncedAt, error: INTEGRATIONS.growthx.error },
-    mail:     { connected: !!INTEGRATIONS.mail.apiKey, syncedAt: INTEGRATIONS.mail.syncedAt, error: INTEGRATIONS.mail.error, rows: INTEGRATIONS.mail.data?.length || 0 },
+    meta:       { connected: !!(INTEGRATIONS.meta.token && INTEGRATIONS.meta.accountId), syncedAt: INTEGRATIONS.meta.syncedAt, error: INTEGRATIONS.meta.error, rows: INTEGRATIONS.meta.data?.length || 0 },
+    cashfree:   { connected: !!(INTEGRATIONS.cashfree.appId && INTEGRATIONS.cashfree.secretKey), syncedAt: INTEGRATIONS.cashfree.syncedAt, error: INTEGRATIONS.cashfree.error, rows: INTEGRATIONS.cashfree.data?.length || 0 },
+    aisensy:    { connected: !!INTEGRATIONS.aisensy.apiKey, syncedAt: INTEGRATIONS.aisensy.syncedAt, error: INTEGRATIONS.aisensy.error, rows: INTEGRATIONS.aisensy.data?.checks?.length || 0 },
+    growthx:    { connected: gxConnected, syncedAt: INTEGRATIONS.growthx.syncedAt, error: INTEGRATIONS.growthx.error },
+    mail:       { connected: !!INTEGRATIONS.mail.apiKey, syncedAt: INTEGRATIONS.mail.syncedAt, error: INTEGRATIONS.mail.error, rows: INTEGRATIONS.mail.data?.length || 0 },
+    lsq:        { connected: !!(INTEGRATIONS.lsq.accessKey && INTEGRATIONS.lsq.secretKey), syncedAt: INTEGRATIONS.lsq.syncedAt, error: INTEGRATIONS.lsq.error, rows: INTEGRATIONS.lsq.data?.leads?.length || 0 },
+    aceconnect: { connected: !!INTEGRATIONS.aceconnect.apiKey, syncedAt: INTEGRATIONS.aceconnect.syncedAt, error: INTEGRATIONS.aceconnect.error, rows: INTEGRATIONS.aceconnect.data?.contacts?.length || 0 },
+    salesa:     { connected: !!INTEGRATIONS.salesa.apiKey, syncedAt: INTEGRATIONS.salesa.syncedAt, error: INTEGRATIONS.salesa.error, rows: INTEGRATIONS.salesa.data?.leads?.length || 0 },
     webhookUrl: process.env.BASE_URL ? `${process.env.BASE_URL}/api/webhook/payment` : null
   });
 });
@@ -1392,11 +1559,14 @@ app.post('/api/integrations/sync/:service', async (req, res) => {
   const { service } = req.params;
   try {
     let result;
-    if (service === 'meta')      result = await syncMeta();
-    else if (service === 'cashfree') result = await syncCashfree();
-    else if (service === 'aisensy')  result = await syncAisensy();
-    else if (service === 'growthx')  result = await syncGrowthx();
-    else if (service === 'mail')     result = await syncMail();
+    if (service === 'meta')           result = await syncMeta();
+    else if (service === 'cashfree')  result = await syncCashfree();
+    else if (service === 'aisensy')   result = await syncAisensy();
+    else if (service === 'growthx')   result = await syncGrowthx();
+    else if (service === 'mail')      result = await syncMail();
+    else if (service === 'lsq')       result = await syncLSQ();
+    else if (service === 'aceconnect')result = await syncAceConnect();
+    else if (service === 'salesa')    result = await syncSalesa();
     else return res.status(400).json({ error: 'Unknown service' });
     res.json({ ok: true, rows: Array.isArray(result) ? result.length : 1 });
   } catch(e) {
@@ -1408,11 +1578,14 @@ app.post('/api/integrations/sync/:service', async (req, res) => {
 // Get integration data for frontend
 app.get('/api/integrations/data', (req, res) => {
   res.json({
-    meta:     INTEGRATIONS.meta.data,
-    cashfree: INTEGRATIONS.cashfree.data,
-    aisensy:  INTEGRATIONS.aisensy.data,
-    growthx:  INTEGRATIONS.growthx.data,
-    mail:     INTEGRATIONS.mail.data
+    meta:       INTEGRATIONS.meta.data,
+    cashfree:   INTEGRATIONS.cashfree.data,
+    aisensy:    INTEGRATIONS.aisensy.data,
+    growthx:    INTEGRATIONS.growthx.data,
+    mail:       INTEGRATIONS.mail.data,
+    lsq:        INTEGRATIONS.lsq.data,
+    aceconnect: INTEGRATIONS.aceconnect.data,
+    salesa:     INTEGRATIONS.salesa.data
   });
 });
 
@@ -1557,9 +1730,14 @@ app.get('*', (req, res) => {
 });
 
 // Pre-populate INTEGRATIONS.growthx from env var so it works without UI config
-if (process.env.GROWTHX_TOKEN) {
-  INTEGRATIONS.growthx.apiKey = process.env.GROWTHX_TOKEN;
-}
+if (process.env.GROWTHX_TOKEN)      INTEGRATIONS.growthx.apiKey    = process.env.GROWTHX_TOKEN;
+if (process.env.LSQ_ACCESS_KEY)     INTEGRATIONS.lsq.accessKey     = process.env.LSQ_ACCESS_KEY;
+if (process.env.LSQ_SECRET_KEY)     INTEGRATIONS.lsq.secretKey     = process.env.LSQ_SECRET_KEY;
+if (process.env.LSQ_HOST)           INTEGRATIONS.lsq.host          = process.env.LSQ_HOST;
+if (process.env.ACECONNECT_API_KEY) INTEGRATIONS.aceconnect.apiKey = process.env.ACECONNECT_API_KEY;
+if (process.env.ACECONNECT_URL)     INTEGRATIONS.aceconnect.baseUrl= process.env.ACECONNECT_URL;
+if (process.env.SALESA_API_KEY)     INTEGRATIONS.salesa.apiKey     = process.env.SALESA_API_KEY;
+if (process.env.SALESA_WORKSPACE)   INTEGRATIONS.salesa.workspaceId= process.env.SALESA_WORKSPACE;
 
 // ── Google Sheets CSV proxy (avoids CORS) ──────────────────────
 app.post('/api/fetch-url', async (req, res) => {

@@ -1933,6 +1933,42 @@ function renderFunnelPage(status) {
     <button class="btn-secondary btn-sm" onclick="loadMailAnalytics()">↺ Load</button>
   </div>
   <div id="mail-analytics-body"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure email integration and click Load.</div></div>
+</div>
+
+<!-- ── LeadSquared Leads ── -->
+<div class="card">
+  <div class="card-header" style="cursor:pointer;" onclick="toggleEl('lsq-data-body','lsq-chev')">
+    <div class="card-title">🔷 LeadSquared — Lead Pipeline</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-secondary btn-sm" onclick="event.stopPropagation();loadLSQData()">↺ Load</button>
+      <span id="lsq-chev" style="color:var(--muted);">▼</span>
+    </div>
+  </div>
+  <div id="lsq-data-body" style="display:none;"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure LSQ credentials in Integrations above, then click Load.</div></div>
+</div>
+
+<!-- ── AceConnect ── -->
+<div class="card">
+  <div class="card-header" style="cursor:pointer;" onclick="toggleEl('aceconnect-data-body','aceconnect-chev')">
+    <div class="card-title">🔗 AceConnect — Contacts & Calls</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-secondary btn-sm" onclick="event.stopPropagation();loadAceConnectData()">↺ Load</button>
+      <span id="aceconnect-chev" style="color:var(--muted);">▼</span>
+    </div>
+  </div>
+  <div id="aceconnect-data-body" style="display:none;"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure AceConnect API key in Integrations above, then click Load.</div></div>
+</div>
+
+<!-- ── Salesa ── -->
+<div class="card">
+  <div class="card-header" style="cursor:pointer;" onclick="toggleEl('salesa-data-body','salesa-chev')">
+    <div class="card-title">🏷️ Salesa — Deals & Lead Tracking</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-secondary btn-sm" onclick="event.stopPropagation();loadSalesaData()">↺ Load</button>
+      <span id="salesa-chev" style="color:var(--muted);">▼</span>
+    </div>
+  </div>
+  <div id="salesa-data-body" style="display:none;"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure Salesa API key in Integrations above, then click Load.</div></div>
 </div>`;
 
   // Set sensible default dates: last full month
@@ -2085,11 +2121,17 @@ function renderGxFunnel(data, from, to) {
 
 function buildIntConfigCards(status) {
   const SERVICES = [
-    { id: 'meta',     icon: '📘', name: 'Meta Ads',   fields: [{k:'token',l:'Access Token',t:'password'},{k:'accountId',l:'Ad Account ID',t:'text',ph:'123456789'}] },
-    { id: 'cashfree', icon: '💳', name: 'Cashfree',   fields: [{k:'appId',l:'App ID',t:'text'},{k:'secretKey',l:'Secret Key',t:'password'},{k:'env',l:'Env',t:'select',opts:['prod','sandbox']}] },
-    { id: 'aisensy',  icon: '💬', name: 'AiSensy',    fields: [{k:'apiKey',l:'API Key',t:'password'}] },
-    { id: 'growthx',  icon: '📈', name: 'GrowthX',    fields: [{k:'apiKey',l:'Bearer Token',t:'password',ph:'Set GROWTHX_TOKEN in Railway env vars'}] },
-    { id: 'mail',     icon: '📧', name: 'Email',      fields: [{k:'provider',l:'Provider',t:'select',opts:['mailchimp','sendgrid','mailercloud']},{k:'apiKey',l:'API Key',t:'password'}] }
+    { id: 'meta',       icon: '📘', name: 'Meta Ads',     fields: [{k:'token',l:'Access Token',t:'password'},{k:'accountId',l:'Ad Account ID',t:'text',ph:'123456789'}] },
+    { id: 'cashfree',   icon: '💳', name: 'Cashfree',     fields: [{k:'appId',l:'App ID',t:'text'},{k:'secretKey',l:'Secret Key',t:'password'},{k:'env',l:'Env',t:'select',opts:['prod','sandbox']}] },
+    { id: 'aisensy',    icon: '💬', name: 'AiSensy',      fields: [{k:'apiKey',l:'API Key',t:'password'}] },
+    { id: 'growthx',    icon: '📈', name: 'GrowthX',      fields: [{k:'apiKey',l:'Bearer Token',t:'password',ph:'Set GROWTHX_TOKEN in Railway env vars'}] },
+    { id: 'mail',       icon: '📧', name: 'Email',        fields: [{k:'provider',l:'Provider',t:'select',opts:['mailchimp','sendgrid','mailercloud']},{k:'apiKey',l:'API Key',t:'password'}] },
+    { id: 'lsq',        icon: '🔷', name: 'LeadSquared',  fields: [{k:'accessKey',l:'Access Key',t:'text',ph:'Set LSQ_ACCESS_KEY in Railway'},{k:'secretKey',l:'Secret Key',t:'password',ph:'Set LSQ_SECRET_KEY in Railway'},{k:'host',l:'API Host',t:'text',ph:'api.leadsquared.com'}],
+      hint: 'Fetches leads from the past 30 days. Get keys from LSQ → Settings → API & Webhooks.' },
+    { id: 'aceconnect', icon: '🔗', name: 'AceConnect',   fields: [{k:'apiKey',l:'API Key',t:'password',ph:'Set ACECONNECT_API_KEY in Railway'},{k:'baseUrl',l:'Base URL',t:'text',ph:'https://api.aceconnect.in'}],
+      hint: 'Pulls contacts, calls, and AC assignments from AceConnect. Set ACECONNECT_URL if on a custom domain.' },
+    { id: 'salesa',     icon: '🏷️', name: 'Salesa',       fields: [{k:'apiKey',l:'API Key',t:'password',ph:'Set SALESA_API_KEY in Railway'},{k:'workspaceId',l:'Workspace ID',t:'text',ph:'Optional — leave blank for default'}],
+      hint: 'Syncs leads, deals, and activity from Salesa CRM. Get API key from Salesa → Settings → Integrations.' }
   ];
 
   return `<div style="padding:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
@@ -2102,9 +2144,10 @@ function buildIntConfigCards(status) {
       if (f.t === 'select') return `<div style="margin-bottom:6px;"><label style="font-size:10px;color:var(--muted);display:block;">${f.l}</label><select id="int-${s.id}-${f.k}" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:5px 8px;border-radius:5px;font-size:12px;">${(f.opts||[]).map(o=>`<option>${o}</option>`).join('')}</select></div>`;
       return `<div style="margin-bottom:6px;"><label style="font-size:10px;color:var(--muted);display:block;">${f.l}</label><input type="${f.t}" id="int-${s.id}-${f.k}" placeholder="${f.ph||''}" style="width:100%;background:var(--ink3);border:1px solid rgba(255,255,255,.1);color:#fff;padding:5px 8px;border-radius:5px;font-size:12px;box-sizing:border-box;"/></div>`;
     }).join('');
+    const hintHtml = s.hint ? `<div style="font-size:10px;color:var(--muted);margin-bottom:8px;line-height:1.4;">${s.hint}</div>` : '';
     return `<div style="background:var(--ink3);border-radius:8px;padding:14px;">
       <div style="font-weight:600;font-size:13px;margin-bottom:8px;">${s.icon} ${s.name} <span style="float:right;">${dot}</span></div>
-      ${errHtml}${syncInfo}${fieldsHtml}
+      ${errHtml}${syncInfo}${hintHtml}${fieldsHtml}
       <div style="display:flex;gap:6px;margin-top:8px;">
         <button class="btn-primary btn-sm" onclick="saveIntConfig('${s.id}')">Save</button>
         <button class="btn-secondary btn-sm" onclick="syncInt('${s.id}')"><span class="spinner" id="int-spin-${s.id}" style="display:none;width:10px;height:10px;"></span> Sync</button>
@@ -2128,7 +2171,13 @@ window.toggleEl = function(bodyId, chevId) {
 };
 
 window.saveIntConfig = function(serviceId) {
-  const FIELDS = { meta:['token','accountId'], cashfree:['appId','secretKey','env'], aisensy:['apiKey'], mail:['provider','apiKey'], growthx:['apiKey'] };
+  const FIELDS = {
+    meta:['token','accountId'], cashfree:['appId','secretKey','env'],
+    aisensy:['apiKey'], mail:['provider','apiKey'], growthx:['apiKey'],
+    lsq:['accessKey','secretKey','host'],
+    aceconnect:['apiKey','baseUrl'],
+    salesa:['apiKey','workspaceId']
+  };
   const payload = { service: serviceId };
   (FIELDS[serviceId]||[]).forEach(f => {
     const el = $(`int-${serviceId}-${f}`);
@@ -2216,6 +2265,138 @@ function fmtNum(n) {
   if (n>=1000)    return (n/1000).toFixed(1)+'K';
   return n.toString();
 }
+
+// ── LeadSquared data panel ────────────────────────────────────
+window.loadLSQData = function() {
+  const body = $('lsq-data-body');
+  if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Loading LSQ leads…</div>`;
+  fetch('/api/integrations/data').then(r=>r.json()).then(d=>{
+    const leads = d.lsq?.leads || [];
+    const fetchedAt = d.lsq?.syncedAt;
+    if (!leads.length) {
+      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure LSQ credentials and click Sync.</div>`;
+      return;
+    }
+    const byStage = {};
+    leads.forEach(l=>{ byStage[l.stage||'Unknown']=(byStage[l.stage||'Unknown']||0)+1; });
+    const stageRows = Object.entries(byStage).sort((a,b)=>b[1]-a[1]).map(([s,n])=>
+      `<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+        <span style="color:#e2e8f0;">${s}</span><span style="font-weight:700;color:var(--ok);">${n}</span>
+      </div>`).join('');
+    const tableRows = leads.slice(0,50).map(l=>`<tr>
+      <td style="font-size:11px;font-weight:600;">${l.name}</td>
+      <td style="font-size:10px;color:var(--muted);">${l.email||'—'}</td>
+      <td style="font-size:11px;">${l.phone||'—'}</td>
+      <td><span class="badge badge-info" style="font-size:10px;">${l.vertical||'—'}</span></td>
+      <td style="font-size:11px;">${l.stage||'—'}</td>
+      <td style="font-size:11px;color:var(--muted);">${l.source||'—'}</td>
+      <td style="font-size:11px;">${l.createdOn?new Date(l.createdOn).toLocaleDateString('en-IN'):''}</td>
+    </tr>`).join('');
+    if (body) body.innerHTML = `
+      <div style="display:flex;gap:12px;padding:12px 0 16px;flex-wrap:wrap;">
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${leads.length}</div><div class="kpi-label">LSQ Leads</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${Object.keys(byStage).length}</div><div class="kpi-label">Stages</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${leads.filter(l=>l.vertical&&l.vertical!=='Other').length}</div><div class="kpi-label">Vertical tagged</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:220px 1fr;gap:16px;margin-bottom:12px;">
+        <div style="background:var(--ink3);border-radius:8px;padding:12px;"><div style="font-size:11px;font-weight:600;color:#fff;margin-bottom:8px;">By Stage</div>${stageRows}</div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Vertical</th><th>Stage</th><th>Source</th><th>Created</th></tr></thead><tbody>${tableRows}</tbody></table></div>
+      </div>
+      ${fetchedAt?`<div style="font-size:10px;color:var(--muted);">Last synced: ${new Date(fetchedAt).toLocaleString('en-IN')}</div>`:''}`;
+  }).catch(()=>{ if(body) body.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; });
+};
+
+// ── AceConnect data panel ─────────────────────────────────────
+window.loadAceConnectData = function() {
+  const body = $('aceconnect-data-body');
+  if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Loading AceConnect data…</div>`;
+  fetch('/api/integrations/data').then(r=>r.json()).then(d=>{
+    const contacts    = d.aceconnect?.contacts    || [];
+    const calls       = d.aceconnect?.calls       || [];
+    const assignments = d.aceconnect?.assignments || [];
+    const syncedAt    = d.aceconnect?.syncedAt;
+    if (!contacts.length && !calls.length) {
+      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure AceConnect API key and click Sync.</div>`;
+      return;
+    }
+    const byAgent = {};
+    contacts.forEach(c=>{ const a=c.assignedTo||'Unassigned'; byAgent[a]=(byAgent[a]||0)+1; });
+    const agentRows = Object.entries(byAgent).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([a,n])=>
+      `<tr><td style="font-size:11px;font-weight:600;">${a}</td><td style="font-size:12px;font-weight:700;color:var(--ok);">${n}</td></tr>`).join('');
+    const contactRows = contacts.slice(0,50).map(c=>`<tr>
+      <td style="font-size:11px;font-weight:600;">${c.name}</td>
+      <td style="font-size:10px;color:var(--muted);">${c.email||'—'}</td>
+      <td style="font-size:11px;">${c.phone||'—'}</td>
+      <td style="font-size:11px;">${c.status||'—'}</td>
+      <td style="font-size:11px;color:var(--ok);">${c.assignedTo||'—'}</td>
+      <td style="font-size:11px;">${c.createdAt?new Date(c.createdAt).toLocaleDateString('en-IN'):''}</td>
+    </tr>`).join('');
+    if (body) body.innerHTML = `
+      <div style="display:flex;gap:12px;padding:12px 0 16px;flex-wrap:wrap;">
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${contacts.length}</div><div class="kpi-label">Contacts</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${calls.length}</div><div class="kpi-label">Calls</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${assignments.length}</div><div class="kpi-label">Assignments</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${Object.keys(byAgent).length}</div><div class="kpi-label">Agents</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:200px 1fr;gap:16px;margin-bottom:12px;">
+        <div style="background:var(--ink3);border-radius:8px;padding:12px;"><div style="font-size:11px;font-weight:600;color:#fff;margin-bottom:8px;">By Agent</div>
+          <table style="width:100%;"><thead><tr><th style="font-size:10px;">Agent</th><th style="font-size:10px;">Contacts</th></tr></thead><tbody>${agentRows}</tbody></table>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Assigned To</th><th>Created</th></tr></thead><tbody>${contactRows}</tbody></table></div>
+      </div>
+      ${syncedAt?`<div style="font-size:10px;color:var(--muted);">Last synced: ${new Date(syncedAt).toLocaleString('en-IN')}</div>`:''}`;
+  }).catch(()=>{ if(body) body.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; });
+};
+
+// ── Salesa data panel ─────────────────────────────────────────
+window.loadSalesaData = function() {
+  const body = $('salesa-data-body');
+  if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Loading Salesa data…</div>`;
+  fetch('/api/integrations/data').then(r=>r.json()).then(d=>{
+    const leads    = d.salesa?.leads    || [];
+    const deals    = d.salesa?.deals    || [];
+    const syncedAt = d.salesa?.syncedAt;
+    if (!leads.length && !deals.length) {
+      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure Salesa API key and click Sync.</div>`;
+      return;
+    }
+    const totalDealValue = deals.reduce((s,d)=>s+(d.value||0),0);
+    const byStage = {};
+    leads.forEach(l=>{ byStage[l.stage||'Unknown']=(byStage[l.stage||'Unknown']||0)+1; });
+    const stageRows = Object.entries(byStage).sort((a,b)=>b[1]-a[1]).map(([s,n])=>
+      `<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+        <span style="color:#e2e8f0;">${s}</span><span style="font-weight:700;color:var(--ok);">${n}</span>
+      </div>`).join('');
+    const leadRows = leads.slice(0,50).map(l=>`<tr>
+      <td style="font-size:11px;font-weight:600;">${l.name}</td>
+      <td style="font-size:10px;color:var(--muted);">${l.email||'—'}</td>
+      <td style="font-size:11px;">${l.phone||'—'}</td>
+      <td style="font-size:11px;">${l.stage||'—'}</td>
+      <td style="font-size:11px;color:var(--ok);">${l.owner||'—'}</td>
+      <td style="font-size:11px;">${l.value?formatINR(l.value):'—'}</td>
+      <td style="font-size:11px;">${l.createdAt?new Date(l.createdAt).toLocaleDateString('en-IN'):''}</td>
+    </tr>`).join('');
+    const dealRows = deals.slice(0,20).map(dl=>`<tr>
+      <td style="font-size:11px;font-weight:600;">${dl.name||'—'}</td>
+      <td style="font-size:12px;font-weight:700;color:var(--ok);">${formatINR(dl.value||0)}</td>
+      <td style="font-size:11px;">${dl.stage||'—'}</td>
+      <td style="font-size:11px;">${dl.owner||'—'}</td>
+      <td style="font-size:11px;">${dl.closedAt?new Date(dl.closedAt).toLocaleDateString('en-IN'):'—'}</td>
+    </tr>`).join('');
+    if (body) body.innerHTML = `
+      <div style="display:flex;gap:12px;padding:12px 0 16px;flex-wrap:wrap;">
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${leads.length}</div><div class="kpi-label">Leads</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${deals.length}</div><div class="kpi-label">Deals</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${formatINR(totalDealValue)}</div><div class="kpi-label">Deal Pipeline</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:200px 1fr;gap:16px;margin-bottom:16px;">
+        <div style="background:var(--ink3);border-radius:8px;padding:12px;"><div style="font-size:11px;font-weight:600;color:#fff;margin-bottom:8px;">Leads by Stage</div>${stageRows}</div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Stage</th><th>Owner</th><th>Value</th><th>Created</th></tr></thead><tbody>${leadRows}</tbody></table></div>
+      </div>
+      ${deals.length?`<div style="margin-bottom:12px;"><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Deals</div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Value</th><th>Stage</th><th>Owner</th><th>Closed</th></tr></thead><tbody>${dealRows}</tbody></table></div></div>`:''}
+      ${syncedAt?`<div style="font-size:10px;color:var(--muted);">Last synced: ${new Date(syncedAt).toLocaleString('en-IN')}</div>`:''}`;
+  }).catch(()=>{ if(body) body.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; });
+};
 
 // ── INTELLIGENCE REPORT (ANALYTICS) ──────────────────────────
 function analytics() {
