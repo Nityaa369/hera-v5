@@ -125,10 +125,64 @@ function navigate(pageId) {
 function loadDataThen(cb) {
   fetch("/api/data")
     .then(r => r.json())
-    .then(d => { DATA_CACHE = d; cb(); })
+    .then(d => {
+      // Merge static seed data as baseline; live API data wins on overlap
+      if (window.STATIC_DATA) {
+        const sd = window.STATIC_DATA;
+        const isEmpty = arr => !arr || arr.length === 0;
+        if (isEmpty(d.leads))      d.leads      = sd.leads      || [];
+        if (isEmpty(d.revenue))    d.revenue    = sd.revenue    || [];
+        if (isEmpty(d.marketing))  d.marketing  = sd.marketing  || [];
+        if (isEmpty(d.webinarDNA)) d.webinarDNA = sd.webinarDNA || [];
+        if (isEmpty(d.groups))     d.groups     = sd.groups     || [];
+        if (isEmpty(d.team))       d.team       = sd.team       || [];
+        if (isEmpty(d.lop))        d.lop        = sd.lop        || [];
+        if (isEmpty(d.talktime))   d.talktime   = sd.talktime   || [];
+        if (!d.monthlySheets || !Object.keys(d.monthlySheets || {}).length)
+          d.monthlySheets = sd.monthlySheets || {};
+        // Merge cohorts: fill in verticals missing from live data
+        const liveCohortIds = new Set((d.verticals ? Object.values(d.verticals).flatMap(v => v.cohorts || []).map(c => c.id) : []));
+        if (sd.cohorts && sd.cohorts.length && liveCohortIds.size === 0) {
+          // Build verticals from static cohorts if server has none
+          if (!d.verticals) d.verticals = {};
+          ['CD','CL','ID','AI','AIW'].forEach(v => { if (!d.verticals[v]) d.verticals[v] = { cohorts: [], totalLeads: 0, totalRevenue: 0, totalUnits: 0 }; });
+          sd.cohorts.forEach(c => {
+            const vert = d.verticals[c.vertical];
+            if (!vert) return;
+            vert.cohorts.push(c);
+            vert.totalLeads   += c.leads   || 0;
+            vert.totalRevenue += c.revenue || 0;
+            vert.totalUnits   += c.units   || 0;
+          });
+        }
+        if (!d.seededAt) d.seededAt = sd.seededAt;
+      }
+      DATA_CACHE = d;
+      cb();
+    })
     .catch(e => {
+      // If API fails entirely, fall back to pure static data
+      if (window.STATIC_DATA) {
+        DATA_CACHE = buildDataFromStatic(window.STATIC_DATA);
+        cb();
+        return;
+      }
       $("main-content").innerHTML = `<div class="alert alert-err"><span class="alert-icon">⚠</span><div class="alert-body"><strong>Data load failed:</strong> ${e.message}</div></div>`;
     });
+}
+
+function buildDataFromStatic(sd) {
+  const d = { leads: sd.leads||[], revenue: sd.revenue||[], marketing: sd.marketing||[], webinarDNA: sd.webinarDNA||[], groups: sd.groups||[], team: sd.team||[], lop: sd.lop||[], talktime: sd.talktime||[], monthlySheets: sd.monthlySheets||{}, seededAt: sd.seededAt, verticals: {}, syncedAt: sd.seededAt, syncing: false };
+  ['CD','CL','ID','AI','AIW'].forEach(v => { d.verticals[v] = { cohorts: [], totalLeads: 0, totalRevenue: 0, totalUnits: 0 }; });
+  (sd.cohorts||[]).forEach(c => {
+    const vert = d.verticals[c.vertical];
+    if (!vert) return;
+    vert.cohorts.push(c);
+    vert.totalLeads   += c.leads   || 0;
+    vert.totalRevenue += c.revenue || 0;
+    vert.totalUnits   += c.units   || 0;
+  });
+  return d;
 }
 
 function renderPage(pageId) {
