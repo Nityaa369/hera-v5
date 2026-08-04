@@ -4,5 +4,6 @@ COPY package.json .
 RUN npm install --legacy-peer-deps
 COPY . .
 RUN mkdir -p data reports
+ENV PORT=3000
 EXPOSE 3000
 CMD ["node", "server.js"]
