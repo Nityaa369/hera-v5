@@ -784,6 +784,123 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// ── DATA SOURCES (persistent config) ────────────────────────
+const DATA_SOURCES_FILE = path.join(DATA_DIR, '_sources.json');
+
+function loadSources() {
+  try { return JSON.parse(fs.readFileSync(DATA_SOURCES_FILE, 'utf8')); } catch(e) { return []; }
+}
+
+function saveSources(sources) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(DATA_SOURCES_FILE, JSON.stringify(sources, null, 2));
+}
+
+app.get('/api/sources', (req, res) => {
+  res.json(loadSources());
+});
+
+app.post('/api/sources', (req, res) => {
+  const sources = loadSources();
+  const newSource = {
+    id: Date.now().toString(36),
+    type: req.body.type || 'url',
+    name: req.body.name || 'Unnamed',
+    url: req.body.url || '',
+    addedAt: new Date().toISOString()
+  };
+  sources.push(newSource);
+  saveSources(sources);
+  res.json(newSource);
+});
+
+app.delete('/api/sources/:id', (req, res) => {
+  const sources = loadSources().filter(s => s.id !== req.params.id);
+  saveSources(sources);
+  res.json({ ok: true });
+});
+
+// Fetch xlsx from a URL (Google Drive export or direct link)
+app.post('/api/fetch-url', async (req, res) => {
+  const { url, name } = req.body;
+  if (!url) return res.status(400).json({ error: 'No URL provided' });
+
+  // Convert Google Drive share link to direct download
+  let fetchUrl = url;
+  const gdMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (gdMatch) {
+    fetchUrl = "https://drive.google.com/uc?export=download&id=" + gdMatch[1];
+  }
+  // Google Sheets export
+  const gsMatch = url.match(/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (gsMatch) {
+    fetchUrl = "https://docs.google.com/spreadsheets/d/" + gsMatch[1] + "/export?format=xlsx";
+  }
+
+  try {
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      const urlObj = new URL(fetchUrl);
+      const mod = urlObj.protocol === 'https:' ? https : require('http');
+      const doReq = (targetUrl) => {
+        mod.get(targetUrl, (r) => {
+          if (r.statusCode === 301 || r.statusCode === 302) {
+            doReq(r.headers.location);
+            return;
+          }
+          r.on('data', c => chunks.push(c));
+          r.on('end', resolve);
+          r.on('error', reject);
+        }).on('error', reject);
+      };
+      doReq(fetchUrl);
+    });
+
+    const buf = Buffer.concat(chunks);
+    if (buf.length < 100) return res.status(400).json({ error: 'Downloaded file too small — check the URL or sharing permissions' });
+
+    const filename = (name || 'fetched_data') + '.xlsx';
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(path.join(DATA_DIR, filename), buf);
+
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const sheets = wb.SheetNames;
+    const preview = readSheet(wb, sheets[0]).slice(0, 5);
+
+    // Save as a source
+    const sources = loadSources();
+    sources.push({ id: Date.now().toString(36), type: 'url', name: filename, url: fetchUrl, addedAt: new Date().toISOString() });
+    saveSources(sources);
+
+    syncData();
+    res.json({ filename, sheets, totalSheets: sheets.length, preview, size: buf.length, message: 'Fetched and synced' });
+  } catch (e) {
+    res.status(500).json({ error: 'Fetch failed: ' + e.message });
+  }
+});
+
+// List files currently in /data
+app.get('/api/data-files', (req, res) => {
+  try {
+    const files = fs.readdirSync(DATA_DIR)
+      .filter(f => f.endsWith('.xlsx') || f.endsWith('.xls'))
+      .map(f => {
+        const stats = fs.statSync(path.join(DATA_DIR, f));
+        return { name: f, size: stats.size, modified: stats.mtime };
+      });
+    res.json(files);
+  } catch(e) { res.json([]); }
+});
+
+app.delete('/api/data-files/:name', (req, res) => {
+  try {
+    const fp = path.join(DATA_DIR, path.basename(req.params.name));
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    syncData();
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/report/generate', (req, res) => {
   try {
     const { vertical, period } = req.body;

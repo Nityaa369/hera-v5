@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { id: 'pipeline', icon: '📊', label: 'Lead Pipeline',  roles: ['full', 'ops'] },
   { id: 'marketing',icon: '📣', label: 'Marketing Funnel',roles: ['full'] },
   { id: 'team',     icon: '👥', label: 'Team Health',    roles: ['full', 'ops'] },
+  { id: 'ingest',   icon: '📥', label: 'Data Ingestion', roles: ['full', 'ops'] },
   { id: 'ops',      icon: '🔧', label: 'Community Ops',  roles: ['full', 'ops'] },
   { id: 'ask',      icon: '🤖', label: 'Ask HERA',       roles: ['full', 'ops'] }
 ];
@@ -131,7 +132,7 @@ function loadDataThen(cb) {
 }
 
 function renderPage(pageId) {
-  const pages = { command, verticals, webinars, revenue, pipeline, marketing, team, ops, ask };
+  const pages = { command, verticals, webinars, revenue, pipeline, marketing, team, ops, ask, ingest };
   if (pages[pageId]) pages[pageId]();
 }
 
@@ -1560,3 +1561,212 @@ function renderChatHistory() {
 </div>`).join("");
   el.scrollTop = el.scrollHeight;
 }
+
+// ── PAGE: DATA INGESTION ──────────────────────────────────────
+function ingest() {
+  const html = `
+<div class="page-header">
+  <div class="page-title">Data Ingestion</div>
+  <div class="page-sub">Upload files, connect Google Drive, fetch URLs, or paste data manually</div>
+</div>
+
+<div class="grid-2 mb-24" style="gap:16px;">
+
+  <!-- UPLOAD FILE -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">📁 Upload File</div></div>
+    <p class="text-muted mb-16" style="font-size:11px;">Community_Master.xlsx · Counsellor__LOP.xlsx · nitya_requirements.xlsx · Sales_data_sheet.xlsx · Recordings_Chat_Files.xlsx</p>
+    <div class="dropzone" id="ingest-dropzone" onclick="$('ingest-file-input').click()">
+      <div class="dropzone-icon">📊</div>
+      <div class="dropzone-text">Click or drag & drop an xlsx file here</div>
+      <div id="ingest-upload-status" style="margin-top:8px;font-size:12px;"></div>
+    </div>
+    <input type="file" id="ingest-file-input" accept=".xlsx,.xls" style="display:none" onchange="ingestUploadFile(this)"/>
+    <div id="ingest-upload-result" style="margin-top:10px;font-size:12px;"></div>
+  </div>
+
+  <!-- GOOGLE DRIVE / URL -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">🔗 Google Drive or URL</div></div>
+    <p class="text-muted mb-16" style="font-size:11px;">Paste a Google Drive share link, Google Sheets link, or any direct .xlsx URL. Make sure sharing is set to "Anyone with link".</p>
+    <div class="form-group">
+      <label>File Name (optional)</label>
+      <input type="text" id="ingest-url-name" placeholder="e.g. Community_Master" style="background:var(--ink3);border:1px solid var(--border2);color:var(--ghost);padding:8px 12px;border-radius:6px;font-size:12px;width:100%;"/>
+    </div>
+    <div class="form-group" style="margin-top:10px;">
+      <label>URL</label>
+      <input type="text" id="ingest-url" placeholder="https://drive.google.com/file/d/... or direct .xlsx URL" style="background:var(--ink3);border:1px solid var(--border2);color:var(--ghost);padding:8px 12px;border-radius:6px;font-size:12px;width:100%;"/>
+    </div>
+    <button class="btn-primary" style="margin-top:12px;" onclick="ingestFromURL()">Fetch & Ingest</button>
+    <div id="ingest-url-result" style="margin-top:10px;font-size:12px;"></div>
+  </div>
+
+</div>
+
+<!-- CURRENT DATA FILES -->
+<div class="card mb-24">
+  <div class="card-header">
+    <div class="card-title">📂 Files Currently Loaded</div>
+    <button class="btn-secondary btn-sm" onclick="loadIngestFiles()">↺ Refresh</button>
+  </div>
+  <div id="ingest-files-list">Loading...</div>
+</div>
+
+<!-- DATA PREVIEW -->
+<div class="card mb-24" id="ingest-preview-card" style="display:none;">
+  <div class="card-header"><div class="card-title" id="ingest-preview-title">Preview</div></div>
+  <div id="ingest-preview-content"></div>
+</div>
+
+<!-- SYNC STATUS -->
+<div class="card">
+  <div class="card-header"><div class="card-title">🔄 Sync Status</div></div>
+  <div id="ingest-sync-status" style="font-size:12px;color:var(--muted);">Loading...</div>
+  <div class="flex-row mt-16" style="gap:10px;flex-wrap:wrap;">
+    <button class="btn-primary" onclick="ingestTriggerSync()">↺ Sync Now</button>
+    <button class="btn-secondary" onclick="navigate('command')">View Dashboard</button>
+  </div>
+</div>`;
+
+  $("main-content").innerHTML = html;
+
+  // Dropzone drag events
+  const dz = $("ingest-dropzone");
+  if (dz) {
+    dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("drag"); });
+    dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+    dz.addEventListener("drop", e => {
+      e.preventDefault(); dz.classList.remove("drag");
+      const f = e.dataTransfer.files[0];
+      if (f) ingestUploadFile({ files: [f] });
+    });
+  }
+
+  loadIngestFiles();
+  loadIngestSyncStatus();
+}
+
+window.ingestUploadFile = function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  $("ingest-upload-status").textContent = "Uploading " + file.name + "...";
+  $("ingest-upload-result").textContent = "";
+  const fd = new FormData();
+  fd.append("file", file);
+  fetch("/api/upload", { method: "POST", body: fd })
+    .then(r => r.json())
+    .then(d => {
+      $("ingest-upload-status").textContent = "";
+      if (d.error) {
+        $("ingest-upload-result").innerHTML = `<span class="text-err">Error: ${d.error}</span>`;
+        return;
+      }
+      $("ingest-upload-result").innerHTML = `<span class="text-ok">✓ ${d.filename} — ${d.totalSheets} sheets found. Sync triggered.</span>`;
+      showIngestPreview(d.filename, d.sheets, d.preview);
+      setTimeout(loadIngestFiles, 1500);
+      setTimeout(loadIngestSyncStatus, 2000);
+    })
+    .catch(e => {
+      $("ingest-upload-status").textContent = "";
+      $("ingest-upload-result").innerHTML = `<span class="text-err">Upload failed: ${e.message}</span>`;
+    });
+};
+
+window.ingestFromURL = function() {
+  const url = ($("ingest-url") || {}).value || "";
+  const name = ($("ingest-url-name") || {}).value || "";
+  if (!url.trim()) { $("ingest-url-result").innerHTML = `<span class="text-err">Please enter a URL.</span>`; return; }
+  $("ingest-url-result").innerHTML = `<span class="text-muted"><span class="spinner"></span> Fetching...</span>`;
+  fetch("/api/fetch-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: url.trim(), name: name.trim() || "fetched_data" })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        $("ingest-url-result").innerHTML = `<span class="text-err">Error: ${d.error}</span>`;
+        return;
+      }
+      $("ingest-url-result").innerHTML = `<span class="text-ok">✓ ${d.filename} fetched (${Math.round(d.size / 1024)}KB) — ${d.totalSheets} sheets. Sync triggered.</span>`;
+      showIngestPreview(d.filename, d.sheets, d.preview);
+      setTimeout(loadIngestFiles, 1500);
+      setTimeout(loadIngestSyncStatus, 2000);
+    })
+    .catch(e => { $("ingest-url-result").innerHTML = `<span class="text-err">Fetch failed: ${e.message}</span>`; });
+};
+
+function showIngestPreview(filename, sheets, preview) {
+  const card = $("ingest-preview-card");
+  const title = $("ingest-preview-title");
+  const content = $("ingest-preview-content");
+  if (!card || !content) return;
+  card.style.display = "";
+  title.textContent = "Preview — " + filename + " (" + sheets.length + " sheets)";
+  if (!preview || !preview.length) { content.innerHTML = "<p class='text-muted' style='font-size:12px;'>No preview available.</p>"; return; }
+  const cols = Object.keys(preview[0] || {}).slice(0, 8);
+  content.innerHTML = `
+<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Sheets: ${sheets.join(" · ")}</div>
+<div class="table-wrap"><table>
+<thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
+<tbody>${preview.map(row => `<tr>${cols.map(c => `<td style="font-size:11px;">${row[c] || ""}</td>`).join("")}</tr>`).join("")}</tbody>
+</table></div>`;
+}
+
+function loadIngestFiles() {
+  fetch("/api/data-files")
+    .then(r => r.json())
+    .then(files => {
+      const el = $("ingest-files-list");
+      if (!el) return;
+      if (!files.length) {
+        el.innerHTML = `<p class="text-muted" style="font-size:12px;padding:12px 0;">No data files loaded yet. Upload a file or fetch from a URL above.</p>`;
+        return;
+      }
+      el.innerHTML = `<div class="table-wrap"><table>
+<thead><tr><th>Filename</th><th>Size</th><th>Last Modified</th><th></th></tr></thead>
+<tbody>
+${files.map(f => `<tr>
+  <td style="font-weight:600;color:#fff;font-size:12px;">📊 ${f.name}</td>
+  <td style="font-size:11px;">${Math.round(f.size / 1024)}KB</td>
+  <td style="font-size:11px;">${new Date(f.modified).toLocaleString("en-IN")}</td>
+  <td><button class="btn-secondary btn-sm" onclick="ingestDeleteFile('${f.name}')" style="color:var(--err);border-color:rgba(239,68,68,.3);">✕ Remove</button></td>
+</tr>`).join("")}
+</tbody></table></div>`;
+    })
+    .catch(() => { const el = $("ingest-files-list"); if (el) el.innerHTML = `<p class="text-muted" style="font-size:12px;">Could not load file list.</p>`; });
+}
+
+window.ingestDeleteFile = function(name) {
+  if (!confirm("Remove " + name + " from HERA data?")) return;
+  fetch("/api/data-files/" + encodeURIComponent(name), { method: "DELETE" })
+    .then(r => r.json())
+    .then(() => { loadIngestFiles(); loadIngestSyncStatus(); })
+    .catch(e => alert("Error: " + e.message));
+};
+
+function loadIngestSyncStatus() {
+  fetch("/api/data/status")
+    .then(r => r.json())
+    .then(s => {
+      const el = $("ingest-sync-status");
+      if (!el) return;
+      const t = s.syncedAt ? new Date(s.syncedAt).toLocaleString("en-IN") : "Never";
+      el.innerHTML = `
+<div class="flex-row" style="flex-wrap:wrap;gap:16px;">
+  <div><span class="text-muted">Last sync:</span> <strong style="color:#fff;">${t}</strong></div>
+  <div><span class="text-muted">Leads loaded:</span> <strong style="color:#fff;">${(s.counts && s.counts.leads || 0).toLocaleString()}</strong></div>
+  <div><span class="text-muted">Revenue rows:</span> <strong style="color:#fff;">${(s.counts && s.counts.revenue || 0).toLocaleString()}</strong></div>
+  <div><span class="text-muted">Webinars:</span> <strong style="color:#fff;">${(s.counts && s.counts.webinars || 0).toLocaleString()}</strong></div>
+  ${s.lastError ? `<div class="text-err">Last error: ${s.lastError}</div>` : ""}
+  ${s.syncing ? `<div class="text-warn"><span class="spinner"></span> Sync in progress...</div>` : ""}
+</div>`;
+    })
+    .catch(() => {});
+}
+
+window.ingestTriggerSync = function() {
+  $("ingest-sync-status").innerHTML = `<span class="text-warn"><span class="spinner"></span> Syncing...</span>`;
+  fetch("/api/sync", { method: "POST" })
+    .then(() => setTimeout(() => { loadIngestFiles(); loadIngestSyncStatus(); loadDataThen(() => {}); }, 3000));
+};
