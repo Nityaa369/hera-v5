@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HERA v5 — Team Abhipsa</title>
+<link rel="stylesheet" href="styles.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo"><span class="logo-h">H</span>ERA</div>
+    <div class="login-sub">Hierarchical Engagement and Revenue Analytics</div>
+    <div class="login-team">Team Abhipsa · LawSikho</div>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="login-user" placeholder="abhipsa / nitya / data"/>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="login-pass" placeholder="hera2025"/>
+    </div>
+    <div class="form-group">
+      <label>Anthropic API Key <span class="muted">(sk-ant-…)</span></label>
+      <input type="password" id="login-key" placeholder="sk-ant-api03-..."/>
+    </div>
+    <div id="login-err" class="login-err"></div>
+    <button class="btn-primary full-width" onclick="doLogin()">Enter HERA</button>
+  </div>
+</div>
+
+<!-- App Shell -->
+<div id="app" style="display:none">
+
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-h">H</span>ERA
+      <span class="version-tag">v5</span>
+    </div>
+    <div class="org-chip">Team Abhipsa</div>
+    <nav id="nav-menu"></nav>
+    <div id="user-chip" class="user-chip"></div>
+    <button class="btn-logout" onclick="doLogout()">Logout</button>
+  </aside>
+
+  <!-- Topbar -->
+  <header id="topbar">
+    <button id="hamburger" onclick="toggleSidebar()">☰</button>
+    <span id="topbar-title">Dashboard</span>
+    <div class="topbar-right">
+      <span id="key-indicator" class="key-indicator"></span>
+      <span id="token-counter" class="token-counter">0 tok · ₹0.00</span>
+      <span id="topbar-time" class="topbar-time"></span>
+      <span class="ta-chip">Team Abhipsa</span>
+      <button class="btn-analyse" onclick="showAnalyse()">⚡ Analyse</button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main id="main-content"></main>
+
+</div>
+
+<!-- Sidebar Overlay -->
+<div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<!-- Print Frame (hidden, shown only on print) -->
+<div id="print-frame">
+  <div class="print-header">
+    <div class="print-logo">HERA</div>
+    <div class="print-meta">
+      <div id="print-title"></div>
+      <div id="print-date"></div>
+    </div>
+  </div>
+  <div id="print-body"></div>
+  <div class="print-footer">CONFIDENTIAL — Team Abhipsa · LawSikho (Addictive Learning Technology Ltd)</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "hera-v5",
+  "version": "5.0.0",
+  "description": "HERA — Hierarchical Engagement and Revenue Analytics · Team Abhipsa",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "HERA_DEV=1 node server.js"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.14",
+    "xlsx": "^0.18.5"
+  }
+}
