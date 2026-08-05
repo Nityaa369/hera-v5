@@ -1969,6 +1969,18 @@ function renderFunnelPage(status) {
     </div>
   </div>
   <div id="salesa-data-body" style="display:none;"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure Salesa API key in Integrations above, then click Load.</div></div>
+</div>
+
+<!-- ── Time Doctor ── -->
+<div class="card">
+  <div class="card-header" style="cursor:pointer;" onclick="toggleEl('td-data-body','td-chev')">
+    <div class="card-title">⏱️ Time Doctor — Staff Work Logs</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-secondary btn-sm" onclick="event.stopPropagation();loadTimeDoctorData()">↺ Load</button>
+      <span id="td-chev" style="color:var(--muted);">▼</span>
+    </div>
+  </div>
+  <div id="td-data-body" style="display:none;"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Configure Time Doctor credentials in Integrations above, then click Load.</div></div>
 </div>`;
 
   // Set sensible default dates: last full month
@@ -2131,7 +2143,9 @@ function buildIntConfigCards(status) {
     { id: 'aceconnect', icon: '🔗', name: 'AceConnect',   fields: [{k:'apiKey',l:'API Key',t:'password',ph:'Set ACECONNECT_API_KEY in Railway'},{k:'baseUrl',l:'Base URL',t:'text',ph:'https://api.aceconnect.in'}],
       hint: 'Pulls contacts, calls, and AC assignments from AceConnect. Set ACECONNECT_URL if on a custom domain.' },
     { id: 'salesa',     icon: '🏷️', name: 'Salesa',       fields: [{k:'apiKey',l:'API Key',t:'password',ph:'Set SALESA_API_KEY in Railway'},{k:'workspaceId',l:'Workspace ID',t:'text',ph:'Optional — leave blank for default'}],
-      hint: 'Syncs leads, deals, and activity from Salesa CRM. Get API key from Salesa → Settings → Integrations.' }
+      hint: 'Syncs leads, deals, and activity from Salesa CRM. Get API key from Salesa → Settings → Integrations.' },
+    { id: 'timedoctor', icon: '⏱️', name: 'Time Doctor',  fields: [{k:'email',l:'Email',t:'text',ph:'Set TD_EMAIL in Railway'},{k:'password',l:'Password',t:'password',ph:'Set TD_PASSWORD in Railway'},{k:'companyId',l:'Company ID',t:'text',ph:'Leave blank to auto-detect'}],
+      hint: 'Pulls staff work logs, attendance, and project time for the last 30 days. Set TD_EMAIL + TD_PASSWORD as Railway env vars.' }
   ];
 
   return `<div style="padding:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
@@ -2176,7 +2190,8 @@ window.saveIntConfig = function(serviceId) {
     aisensy:['apiKey'], mail:['provider','apiKey'], growthx:['apiKey'],
     lsq:['accessKey','secretKey','host'],
     aceconnect:['apiKey','baseUrl'],
-    salesa:['apiKey','workspaceId']
+    salesa:['apiKey','workspaceId'],
+    timedoctor:['email','password','companyId']
   };
   const payload = { service: serviceId };
   (FIELDS[serviceId]||[]).forEach(f => {
@@ -2395,6 +2410,68 @@ window.loadSalesaData = function() {
       </div>
       ${deals.length?`<div style="margin-bottom:12px;"><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Deals</div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Value</th><th>Stage</th><th>Owner</th><th>Closed</th></tr></thead><tbody>${dealRows}</tbody></table></div></div>`:''}
       ${syncedAt?`<div style="font-size:10px;color:var(--muted);">Last synced: ${new Date(syncedAt).toLocaleString('en-IN')}</div>`:''}`;
+  }).catch(()=>{ if(body) body.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; });
+};
+
+window.loadTimeDoctorData = function() {
+  const body = $('td-data-body');
+  if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Loading Time Doctor data…</div>`;
+  fetch('/api/integrations/data').then(r=>r.json()).then(d=>{
+    const td = d.timedoctor;
+    if (!td || !td.users || !td.users.length) {
+      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure Time Doctor credentials and click Sync.</div>`;
+      return;
+    }
+    const { users, attendance, projectNames, period, totalHours } = td;
+    const userRows = users.map(u => {
+      const topProjName = u.topProject ? (projectNames?.[u.topProject] || u.topProject) : '—';
+      const pct = totalHours ? Math.round((u.totalHours / totalHours) * 100) : 0;
+      return `<tr>
+        <td style="font-size:11px;font-weight:600;">${u.name}</td>
+        <td style="font-size:10px;color:var(--muted);">${u.email||'—'}</td>
+        <td style="font-size:12px;font-weight:700;color:var(--ok);">${u.totalHours}h</td>
+        <td style="font-size:11px;">${u.daysWorked}d</td>
+        <td style="font-size:11px;">${u.avgHoursPerDay}h/d</td>
+        <td style="font-size:10px;color:var(--muted);">${topProjName}</td>
+        <td style="font-size:11px;">
+          <div style="background:rgba(255,255,255,.1);border-radius:4px;height:6px;width:100px;overflow:hidden;">
+            <div style="background:var(--ok);height:100%;width:${pct}%;"></div>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    // Last 7 days attendance heatmap
+    const today = new Date();
+    const last7 = Array.from({length:7},(_,i)=>{
+      const d2=new Date(today); d2.setDate(d2.getDate()-i); return d2.toISOString().slice(0,10);
+    }).reverse();
+    const attMap = {};
+    (attendance||[]).forEach(r=>{ if(!attMap[r.date])attMap[r.date]={}; attMap[r.date][r.userId]={h:r.hoursWorked,s:r.status}; });
+    const heatRows = users.slice(0,15).map(u=>{
+      const cells = last7.map(date=>{
+        const rec = attMap[date]?.[u.id];
+        if(!rec) return `<td style="background:rgba(255,255,255,.04);border-radius:3px;width:32px;text-align:center;font-size:9px;color:var(--muted);">—</td>`;
+        const h = rec.h||0;
+        const bg = h>=7?'var(--ok)':h>=4?'#d97706':h>0?'#ef4444':'rgba(255,255,255,.04)';
+        return `<td style="background:${bg};border-radius:3px;width:32px;text-align:center;font-size:9px;font-weight:700;color:#fff;">${h}h</td>`;
+      }).join('');
+      return `<tr><td style="font-size:11px;padding-right:8px;white-space:nowrap;">${u.name.split(' ')[0]}</td>${cells}</tr>`;
+    }).join('');
+    const heatHead = last7.map(d2=>`<th style="font-size:9px;text-align:center;width:32px;">${d2.slice(5)}</th>`).join('');
+
+    if (body) body.innerHTML = `
+      <div style="display:flex;gap:12px;padding:12px 0 16px;flex-wrap:wrap;">
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${users.length}</div><div class="kpi-label">Active Staff</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${totalHours}h</div><div class="kpi-label">Total Hours (30d)</div></div>
+        <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${users.length?+(totalHours/users.length).toFixed(1):0}h</div><div class="kpi-label">Avg per Staff</div></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Period: ${period?.startDate} → ${period?.endDate}</div>
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Staff Hours Ranking</div>
+      <div class="table-wrap" style="margin-bottom:20px;"><table><thead><tr><th>Name</th><th>Email</th><th>Total</th><th>Days</th><th>Avg/Day</th><th>Top Project</th><th>Share</th></tr></thead><tbody>${userRows}</tbody></table></div>
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Attendance Heatmap (last 7 days)</div>
+      <div class="table-wrap"><table><thead><tr><th style="text-align:left;">Staff</th>${heatHead}</tr></thead><tbody>${heatRows}</tbody></table></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:12px;">🟢 ≥7h &nbsp; 🟡 4-6h &nbsp; 🔴 <4h &nbsp; — absent/no data</div>`;
   }).catch(()=>{ if(body) body.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; });
 };
 

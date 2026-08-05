@@ -997,7 +997,8 @@ let INTEGRATIONS = {
   mail:       { provider: null, apiKey: null, listId: null, data: null, syncedAt: null, error: null },
   lsq:        { accessKey: null, secretKey: null, host: 'api.leadsquared.com', data: null, syncedAt: null, error: null },
   aceconnect: { apiKey: null, baseUrl: null, data: null, syncedAt: null, error: null },
-  salesa:     { apiKey: null, workspaceId: null, data: null, syncedAt: null, error: null }
+  salesa:     { apiKey: null, workspaceId: null, data: null, syncedAt: null, error: null },
+  timedoctor: { email: null, password: null, token: null, companyId: null, data: null, syncedAt: null, error: null }
 };
 
 // ── HTTP HELPER ──────────────────────────────────────────────
@@ -1500,6 +1501,117 @@ async function syncSalesa() {
   return INTEGRATIONS.salesa.data;
 }
 
+// ── TIME DOCTOR SYNC ─────────────────────────────────────────
+async function syncTimeDoctor() {
+  const td = INTEGRATIONS.timedoctor;
+  td.error = null;
+
+  // Step 1: get token via login (or reuse stored token)
+  const email    = td.email    || process.env.TD_EMAIL    || '';
+  const password = td.password || process.env.TD_PASSWORD || '';
+  const companyId= td.companyId|| process.env.TD_COMPANY_ID || '';
+
+  if (!email || !password) throw new Error('Time Doctor email + password required');
+
+  // Authenticate
+  const loginResp = await fetch('https://api2.timedoctor.com/api/1.0/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, permissions: 'read' })
+  });
+  const loginData = await loginResp.json();
+  if (!loginResp.ok || !loginData.data?.token) {
+    throw new Error(loginData.message || 'Time Doctor login failed');
+  }
+  const token = loginData.data.token;
+  const cid   = companyId || loginData.data.accounts?.[0]?.company_id || '';
+  td.token     = token;
+  td.companyId = cid;
+
+  const base   = `https://api2.timedoctor.com/api/1.0`;
+  const params = `token=${token}&company_id=${cid}`;
+
+  // Date range: last 30 days
+  const today     = new Date();
+  const startDate = new Date(today - 30 * 86400000).toISOString().slice(0, 10);
+  const endDate   = today.toISOString().slice(0, 10);
+
+  // Fetch all in parallel
+  const [usersResp, worklogResp, attendanceResp, projectsResp] = await Promise.all([
+    fetch(`${base}/users?${params}&all-users=1`),
+    fetch(`${base}/activity/worklog?${params}&start_date=${startDate}&end_date=${endDate}&limit=500`),
+    fetch(`${base}/reports/attendance?${params}&start_date=${startDate}&end_date=${endDate}`),
+    fetch(`${base}/projects?${params}`)
+  ]);
+
+  const [usersData, worklogData, attendanceData, projectsData] = await Promise.all([
+    usersResp.json(), worklogResp.json(), attendanceResp.json(), projectsResp.json()
+  ]);
+
+  const users      = usersData.data?.users || [];
+  const worklogs   = worklogData.data?.worklogs || worklogData.data || [];
+  const attendance = attendanceData.data?.attendance || attendanceData.data || [];
+  const projects   = projectsData.data?.projects || [];
+
+  // Build per-user summary
+  const userMap = {};
+  users.forEach(u => {
+    userMap[u.id] = {
+      id: u.id, name: u.name, email: u.email,
+      totalSeconds: 0, projects: {}, daysWorked: new Set()
+    };
+  });
+
+  // Aggregate work log
+  (Array.isArray(worklogs) ? worklogs : []).forEach(log => {
+    const uid = log.userId || log.user_id;
+    if (!userMap[uid]) return;
+    const secs = log.time || log.seconds || 0;
+    userMap[uid].totalSeconds += secs;
+    if (log.projectId || log.project_id) {
+      const pid = log.projectId || log.project_id;
+      userMap[uid].projects[pid] = (userMap[uid].projects[pid] || 0) + secs;
+    }
+    if (log.date) userMap[uid].daysWorked.add(log.date);
+  });
+
+  // Convert sets to counts
+  const userSummaries = Object.values(userMap).map(u => ({
+    ...u,
+    daysWorked: u.daysWorked.size,
+    totalHours: +(u.totalSeconds / 3600).toFixed(1),
+    avgHoursPerDay: u.daysWorked.size ? +((u.totalSeconds / 3600) / u.daysWorked.size).toFixed(1) : 0,
+    topProject: Object.entries(u.projects).sort((a,b)=>b[1]-a[1])[0]?.[0] || null
+  })).sort((a,b) => b.totalHours - a.totalHours);
+
+  // Attendance rows
+  const attendanceRows = (Array.isArray(attendance) ? attendance : []).map(r => ({
+    userId: r.userId || r.user_id,
+    userName: users.find(u => u.id === (r.userId || r.user_id))?.name || 'Unknown',
+    date: r.date,
+    loginTime: r.login || r.loginTime,
+    logoutTime: r.logout || r.logoutTime,
+    hoursWorked: +((r.totalTime || r.hours || 0) / 3600).toFixed(1),
+    status: r.status || (r.totalTime > 0 ? 'present' : 'absent')
+  }));
+
+  // Project name lookup
+  const projectNames = {};
+  projects.forEach(p => { projectNames[p.id] = p.name; });
+
+  td.data = {
+    users: userSummaries,
+    attendance: attendanceRows,
+    projects,
+    projectNames,
+    period: { startDate, endDate },
+    totalUsers: users.length,
+    totalHours: +(userSummaries.reduce((s,u) => s + u.totalHours, 0)).toFixed(1)
+  };
+  td.syncedAt = new Date().toISOString();
+  return td.data;
+}
+
 // ── TEAM ABHIPSA FILTER ───────────────────────────────────────
 const ABHIPSA_VERTICALS = new Set(['CD','CL','ID','AI','AIW']);
 function abhipsaOnly(arr) {
@@ -1538,6 +1650,7 @@ app.get('/api/integrations/status', (req, res) => {
     lsq:        { connected: !!(INTEGRATIONS.lsq.accessKey && INTEGRATIONS.lsq.secretKey), syncedAt: INTEGRATIONS.lsq.syncedAt, error: INTEGRATIONS.lsq.error, rows: INTEGRATIONS.lsq.data?.leads?.length || 0 },
     aceconnect: { connected: !!INTEGRATIONS.aceconnect.apiKey, syncedAt: INTEGRATIONS.aceconnect.syncedAt, error: INTEGRATIONS.aceconnect.error, rows: INTEGRATIONS.aceconnect.data?.contacts?.length || 0 },
     salesa:     { connected: !!INTEGRATIONS.salesa.apiKey, syncedAt: INTEGRATIONS.salesa.syncedAt, error: INTEGRATIONS.salesa.error, rows: INTEGRATIONS.salesa.data?.leads?.length || 0 },
+    timedoctor: { connected: !!(INTEGRATIONS.timedoctor.email || process.env.TD_EMAIL), syncedAt: INTEGRATIONS.timedoctor.syncedAt, error: INTEGRATIONS.timedoctor.error, rows: INTEGRATIONS.timedoctor.data?.users?.length || 0 },
     webhookUrl: process.env.BASE_URL ? `${process.env.BASE_URL}/api/webhook/payment` : null
   });
 });
@@ -1567,6 +1680,7 @@ app.post('/api/integrations/sync/:service', async (req, res) => {
     else if (service === 'lsq')       result = await syncLSQ();
     else if (service === 'aceconnect')result = await syncAceConnect();
     else if (service === 'salesa')    result = await syncSalesa();
+    else if (service === 'timedoctor') result = await syncTimeDoctor();
     else return res.status(400).json({ error: 'Unknown service' });
     res.json({ ok: true, rows: Array.isArray(result) ? result.length : 1 });
   } catch(e) {
@@ -1585,7 +1699,8 @@ app.get('/api/integrations/data', (req, res) => {
     mail:       INTEGRATIONS.mail.data,
     lsq:        INTEGRATIONS.lsq.data,
     aceconnect: INTEGRATIONS.aceconnect.data,
-    salesa:     INTEGRATIONS.salesa.data
+    salesa:     INTEGRATIONS.salesa.data,
+    timedoctor: INTEGRATIONS.timedoctor.data
   });
 });
 
@@ -1738,6 +1853,9 @@ if (process.env.ACECONNECT_API_KEY) INTEGRATIONS.aceconnect.apiKey = process.env
 if (process.env.ACECONNECT_URL)     INTEGRATIONS.aceconnect.baseUrl= process.env.ACECONNECT_URL;
 if (process.env.SALESA_API_KEY)     INTEGRATIONS.salesa.apiKey     = process.env.SALESA_API_KEY;
 if (process.env.SALESA_WORKSPACE)   INTEGRATIONS.salesa.workspaceId= process.env.SALESA_WORKSPACE;
+if (process.env.TD_EMAIL)           INTEGRATIONS.timedoctor.email   = process.env.TD_EMAIL;
+if (process.env.TD_PASSWORD)        INTEGRATIONS.timedoctor.password= process.env.TD_PASSWORD;
+if (process.env.TD_COMPANY_ID)      INTEGRATIONS.timedoctor.companyId= process.env.TD_COMPANY_ID;
 
 // ── Google Sheets CSV proxy (avoids CORS) ──────────────────────
 app.post('/api/fetch-url', async (req, res) => {
