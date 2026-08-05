@@ -2414,12 +2414,14 @@ window.loadSalesaData = function() {
 };
 
 window.loadTimeDoctorData = function() {
-  const body = $('td-data-body');
-  if (body) body.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Loading Time Doctor data…</div>`;
+  // Fill all TD panels currently in the DOM (ops page + report page)
+  const bodies = ['td-data-body', 'rpt-td-body'].map(id => $(id)).filter(Boolean);
+  bodies.forEach(b => { b.innerHTML = `<div style="padding:16px;text-align:center;"><span class="spinner"></span> Loading Time Doctor data…</div>`; });
+  const body = bodies[0] || null;
   fetch('/api/integrations/data').then(r=>r.json()).then(d=>{
     const td = d.timedoctor;
     if (!td || !td.users || !td.users.length) {
-      if (body) body.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure Time Doctor credentials and click Sync.</div>`;
+      bodies.forEach(b => { b.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">No data. Configure Time Doctor credentials and click Sync.</div>`; });
       return;
     }
     const { users, attendance, projectNames, period, totalHours } = td;
@@ -2460,7 +2462,7 @@ window.loadTimeDoctorData = function() {
     }).join('');
     const heatHead = last7.map(d2=>`<th style="font-size:9px;text-align:center;width:32px;">${d2.slice(5)}</th>`).join('');
 
-    if (body) body.innerHTML = `
+    const html = `
       <div style="display:flex;gap:12px;padding:12px 0 16px;flex-wrap:wrap;">
         <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${users.length}</div><div class="kpi-label">Active Staff</div></div>
         <div class="kpi-card" style="flex:1;min-width:100px;"><div class="kpi-val">${totalHours}h</div><div class="kpi-label">Total Hours (30d)</div></div>
@@ -2472,7 +2474,8 @@ window.loadTimeDoctorData = function() {
       <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Attendance Heatmap (last 7 days)</div>
       <div class="table-wrap"><table><thead><tr><th style="text-align:left;">Staff</th>${heatHead}</tr></thead><tbody>${heatRows}</tbody></table></div>
       <div style="font-size:10px;color:var(--muted);margin-top:12px;">🟢 ≥7h &nbsp; 🟡 4-6h &nbsp; 🔴 <4h &nbsp; — absent/no data</div>`;
-  }).catch(()=>{ if(body) body.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; });
+    bodies.forEach(b => { b.innerHTML = html; });
+  }).catch(()=>{ bodies.forEach(b => { b.innerHTML=`<div style="padding:16px;color:var(--err);">Load failed. Check console.</div>`; }); });
 };
 
 // ── INTELLIGENCE REPORT (ANALYTICS) ──────────────────────────
@@ -2697,6 +2700,18 @@ function analytics() {
       <div style="font-size:12px;color:var(--muted);line-height:1.5;">${imp.body}</div>
     </div>`).join('')}
   </div>
+</div>
+
+<!-- Time Doctor Staff Activity -->
+<div class="card mb-20">
+  <div class="card-header" style="cursor:pointer;" onclick="toggleEl('rpt-td-body','rpt-td-chev')">
+    <div class="card-title">⏱️ Staff Activity — Time Doctor</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-secondary btn-sm" onclick="event.stopPropagation();const b=$('rpt-td-body');if(b)b.style.display='';const c=$('rpt-td-chev');if(c)c.textContent='▲';loadTimeDoctorData()">↺ Load</button>
+      <span id="rpt-td-chev" style="color:var(--muted);">▼</span>
+    </div>
+  </div>
+  <div id="rpt-td-body" style="display:none;"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">Click Load to pull Time Doctor work logs.</div></div>
 </div>
 
 <div id="analytics-ai-result"></div>`;
